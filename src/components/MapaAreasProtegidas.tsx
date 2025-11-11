@@ -37,7 +37,7 @@ export function MapaAreasProtegidas({
   areas,
   onAreaSelect,
   selectedAreaId,
-  title = 'Mapa de Áreas Protegidas',
+  title,
   className = '',
   showLegend = true,
   centered = false
@@ -58,12 +58,14 @@ export function MapaAreasProtegidas({
 
   return (
     <Card className={`h-full border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 flex flex-col overflow-hidden ${className}`}>
-      <CardHeader className="pb-2 sm:pb-3 px-3 sm:px-4 md:px-6 pt-3 sm:pt-4 md:pt-6">
-        <CardTitle className="flex items-center gap-1.5 sm:gap-2 text-sm sm:text-base md:text-lg">
-          <MapPin className="h-4 w-4 sm:h-5 sm:w-5 text-green-600 dark:text-green-400 flex-shrink-0" />
-          <span className="truncate">{title}</span>
-        </CardTitle>
-      </CardHeader>
+      {title && (
+        <CardHeader className="pb-2 sm:pb-3 px-3 sm:px-4 md:px-6 pt-3 sm:pt-4 md:pt-6">
+          <CardTitle className="flex items-center gap-1.5 sm:gap-2 text-sm sm:text-base md:text-lg">
+            <MapPin className="h-4 w-4 sm:h-5 sm:w-5 text-green-600 dark:text-green-400 flex-shrink-0" />
+            <span className="truncate">{title}</span>
+          </CardTitle>
+        </CardHeader>
+      )}
       <CardContent className="flex-1 relative p-2 sm:p-3 md:p-4 min-h-[400px]">
         {isLoaded ? (
           <GoogleMap

@@ -203,7 +203,6 @@ export function Dashboard({ onNavigate, currentUser }: DashboardProps) {
             areas={areas} 
             onAreaSelect={handleAreaSelect}
             selectedAreaId={selectedArea?.id}
-            title="Áreas Protegidas de Guatemala"
             showLegend={false}
           />
         </div>

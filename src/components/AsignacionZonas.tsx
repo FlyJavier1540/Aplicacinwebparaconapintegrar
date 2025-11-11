@@ -133,28 +133,75 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
   // Estados principales
   const [areasList, setAreasList] = useState<AreaProtegida[]>([]);
   const [guardarecursosList, setGuardarecursosList] = useState<Guardarecurso[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedDepartamento, setSelectedDepartamento] = useState<string>('todos');
-  
-  // Estados para diálogo
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingArea, setEditingArea] = useState<AreaProtegida | null>(null);
-  
-  // Estados para confirmación de cambio de estado
-  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedDepartamento, setSelectedDepartamento] = useState('todos');
+  const [formData, setFormData] = useState<AreaProtegidaFormData>(areasProtegidasService.createEmptyFormData());
   const [estadoPendiente, setEstadoPendiente] = useState<AreaEstadoPendiente | null>(null);
+  const [isMapDialogOpen, setIsMapDialogOpen] = useState(false);
+  const [isEditingCoords, setIsEditingCoords] = useState(false);
+  const [tempCoords, setTempCoords] = useState<{ lat: number; lng: number } | null>(null);
   
-  // Form data usando el servicio
-  const [formData, setFormData] = useState(areasProtegidasService.createEmptyFormData());
+  // Estados para ecosistemas y departamentos dinámicos
+  const [ecosistemas, setEcosistemas] = useState<string[]>([]);
+  const [departamentos, setDepartamentos] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+
+  /**
+   * Cargar ecosistemas desde la base de datos
+   */
+  const loadEcosistemas = useCallback(async () => {
+    try {
+      const { fetchEcosistemas } = await import('../utils/areasProtegidasService');
+      const data = await fetchEcosistemas();
+      setEcosistemas(data);
+    } catch (error) {
+      console.error('Error al cargar ecosistemas:', error);
+      // Fallback a valores estáticos
+      setEcosistemas([
+        'Bosque Tropical Húmedo',
+        'Bosque Tropical Seco', 
+        'Bosque Nublado',
+        'Humedales',
+        'Manglares',
+        'Sabanas',
+        'Bosque Mixto',
+        'Matorral Volcánico',
+        'Karst'
+      ]);
+    }
+  }, []);
+
+  /**
+   * Cargar departamentos desde la base de datos
+   */
+  const loadDepartamentos = useCallback(async () => {
+    try {
+      const { fetchDepartamentos } = await import('../utils/areasProtegidasService');
+      const data = await fetchDepartamentos();
+      setDepartamentos(data);
+    } catch (error) {
+      console.error('Error al cargar departamentos:', error);
+      // Fallback a valores estáticos
+      setDepartamentos([
+        'Petén', 'Alta Verapaz', 'Baja Verapaz', 'Chimaltenango', 
+        'Escuintla', 'Guatemala', 'Quetzaltenango', 'Huehuetenango',
+        'Izabal', 'Jalapa', 'Jutiapa', 'Quiché', 'Retalhuleu',
+        'Sacatepéquez', 'San Marcos', 'Santa Rosa', 'Sololá',
+        'Suchitepéquez', 'Totonicapán', 'Zacapa', 'El Progreso', 'Chiquimula'
+      ]);
+    }
+  }, []);
 
   /**
    * Cargar áreas - Memoizado
    * 🔒 SEGURIDAD: Si hay error, fuerza logout
    */
   const loadAreas = useCallback(async () => {
-    setIsLoading(true);
     try {
+      setIsLoading(true);
       const data = await areasProtegidasService.fetchAreasProtegidas();
       setAreasList(data);
     } catch (error) {
@@ -183,11 +230,9 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
   useEffect(() => {
     loadAreas();
     loadGuardarecursos();
-  }, [loadAreas, loadGuardarecursos]);
-
-  // Opciones desde el servicio - Memoizadas
-  const ecosistemas = useMemo(() => areasProtegidasService.ecosistemas, []);
-  const departamentos = useMemo(() => areasProtegidasService.departamentos, []);
+    loadEcosistemas();
+    loadDepartamentos();
+  }, [loadAreas, loadGuardarecursos, loadEcosistemas, loadDepartamentos]);
 
   /**
    * Filtros usando el servicio - Memoizado

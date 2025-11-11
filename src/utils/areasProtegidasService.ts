@@ -76,6 +76,72 @@ export const ECOSISTEMAS_GUATEMALA = [
 // ===== FUNCIONES DE FILTRADO =====
 
 /**
+ * Obtiene todos los ecosistemas desde la base de datos
+ * 
+ * @returns Array de nombres de ecosistemas
+ */
+export async function fetchEcosistemas(): Promise<string[]> {
+  try {
+    const token = getRequiredAuthToken();
+    
+    const response = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/ecosistemas`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      }
+    );
+
+    if (!response.ok) {
+      console.error('Error al obtener ecosistemas:', response.statusText);
+      return [];
+    }
+
+    const data = await response.json();
+    return data.map((e: { ecs_id: number; ecs_nombre: string }) => e.ecs_nombre);
+  } catch (error) {
+    console.error('Error en fetchEcosistemas:', error);
+    return [];
+  }
+}
+
+/**
+ * Obtiene todos los departamentos desde la base de datos
+ * 
+ * @returns Array de nombres de departamentos
+ */
+export async function fetchDepartamentos(): Promise<string[]> {
+  try {
+    const token = getRequiredAuthToken();
+    
+    const response = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/departamentos`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      }
+    );
+
+    if (!response.ok) {
+      console.error('Error al obtener departamentos:', response.statusText);
+      return [];
+    }
+
+    const data = await response.json();
+    return data.map((d: { dpt_id: number; dpt_nombre: string }) => d.dpt_nombre);
+  } catch (error) {
+    console.error('Error en fetchDepartamentos:', error);
+    return [];
+  }
+}
+
+/**
  * Filtra áreas protegidas excluyendo desactivadas
  * 
  * @param areas - Lista completa de áreas protegidas

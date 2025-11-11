@@ -370,10 +370,20 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
       const text = event.target?.result as string;
       
       try {
+        console.log('📄 Contenido del CSV:', text);
         const parseResult = actividadesService.processBulkUploadCSV(text, bulkGuardarecurso);
         
+        console.log('📊 Resultado del parseo:', parseResult);
+        console.log('✅ Actividades cargadas:', parseResult.actividadesCargadas);
+        console.log('❌ Actividades con error:', parseResult.actividadesConError);
+        console.log('📋 Errores:', parseResult.errores);
+        
         if (parseResult.actividades.length === 0) {
-          toast.error('No se encontraron actividades válidas para cargar');
+          // Mostrar detalles de los errores en el toast
+          const detalleErrores = parseResult.errores.length > 0 
+            ? '\n\n' + parseResult.errores.slice(0, 3).join('\n')
+            : '';
+          toast.error('No se encontraron actividades válidas para cargar' + detalleErrores);
           return;
         }
 

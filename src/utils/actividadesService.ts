@@ -34,6 +34,18 @@ export type TipoActividad =
   | 'Mantenimiento de Reforestación';
 
 /**
+ * Mapeo de IDs a nombres de tipos de actividad
+ * Para usar en carga masiva CSV
+ */
+export const TIPO_ID_MAP: Record<string, TipoActividad> = {
+  '1': 'Patrullaje de Control y Vigilancia',
+  '2': 'Actividades de Prevención y Atención de Incendios Forestales',
+  '3': 'Mantenimiento de Área Protegida',
+  '4': 'Reforestación de Área Protegida',
+  '5': 'Mantenimiento de Reforestación'
+};
+
+/**
  * Estados de actividad
  */
 export type EstadoActividad = 'Programada' | 'En Progreso' | 'Completada';
@@ -393,14 +405,20 @@ export function validarYFormatearFecha(fechaStr: string): string | null {
     }
   }
   
-  // Intentar parsear otros formatos comunes
   // Formato DD/MM/YYYY
   if (/^\d{2}\/\d{2}\/\d{4}$/.test(fechaStr)) {
     const [day, month, year] = fechaStr.split('/');
-    fechaStr = `${year}-${month}-${day}`;
+    const fechaFormateada = `${year}-${month}-${day}`;
+    // Validar que la fecha sea válida
+    const fecha = new Date(fechaFormateada + 'T00:00:00');
+    if (!isNaN(fecha.getTime())) {
+      return fechaFormateada;
+    }
+    return null;
   }
-  // Formato MM/DD/YYYY
-  else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(fechaStr)) {
+  
+  // Formato MM/DD/YYYY (menos común, pero por si acaso)
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(fechaStr)) {
     const fecha = new Date(fechaStr);
     if (!isNaN(fecha.getTime())) {
       const year = fecha.getFullYear();
@@ -428,7 +446,7 @@ export function validarYFormatearFecha(fechaStr: string): string | null {
 
 /**
  * Genera el contenido CSV de la plantilla de carga masiva
- * Incluye headers y ejemplos
+ * Incluye headers, guía de IDs de tipos de actividad y ejemplos
  * 
  * @returns Contenido CSV como string
  * 
@@ -461,7 +479,7 @@ export function generateTemplateCSV(): string {
   
   const ejemploRow1 = [
     'ACT-001',
-    'Patrullaje de Control y Vigilancia',
+    '1',
     'Recorrido de vigilancia en el sector norte del área protegida',
     formatoFecha(fecha1),
     '08:00'
@@ -469,10 +487,34 @@ export function generateTemplateCSV(): string {
   
   const ejemploRow2 = [
     'ACT-002',
-    'Actividades de Prevención y Atención de Incendios Forestales',
+    '2',
     'Inspección de puntos críticos de riesgo de incendios',
     formatoFecha(fecha2),
     '09:00'
+  ];
+  
+  // Comentarios con guía de tipos AL FINAL (usando # como comentario)
+  // Esto evita que Excel corrompa el CSV
+  const comentariosGuia = [
+    '',
+    '',
+    '# ========================================',
+    '# GUIA DE TIPOS DE ACTIVIDAD:',
+    '# ========================================',
+    '# 1 = Patrullaje de Control y Vigilancia',
+    '# 2 = Actividades de Prevención y Atención de Incendios Forestales',
+    '# 3 = Mantenimiento de Área Protegida',
+    '# 4 = Reforestación de Área Protegida',
+    '# 5 = Mantenimiento de Reforestación',
+    '#',
+    '# ========================================',
+    '# INSTRUCCIONES:',
+    '# ========================================',
+    '# - En la columna "tipo" coloque el ID del tipo (1, 2, 3, 4 o 5)',
+    '# - Fecha debe estar en formato YYYY-MM-DD (ej: 2025-11-15) o DD/MM/YYYY (ej: 15/11/2025)',
+    '# - Hora debe estar en formato HH:MM (ej: 08:00)',
+    '# - Puede eliminar estas líneas de comentario antes de cargar el archivo',
+    '#'
   ];
   
   return [
@@ -482,7 +524,8 @@ export function generateTemplateCSV(): string {
     // Agregar filas vacías para facilitar el llenado
     Array(headers.length).fill('').join(','),
     Array(headers.length).fill('').join(','),
-    Array(headers.length).fill('').join(',')
+    Array(headers.length).fill('').join(','),
+    ...comentariosGuia
   ].join('\n');
 }
 
@@ -504,7 +547,11 @@ export function processBulkUploadCSV(
   guardarecursoAsignado: string
 ): BulkUploadResult {
   const lines = csvText.split('\n');
-  const headers = lines[0].split(',').map(h => h.trim());
+  
+  // Filtrar líneas de comentarios (que empiezan con #)
+  const lineasSinComentarios = lines.filter(line => !line.trim().startsWith('#'));
+  
+  const headers = lineasSinComentarios[0].split(',').map(h => h.trim());
   
   let actividadesCargadas = 0;
   let actividadesConError = 0;
@@ -512,8 +559,8 @@ export function processBulkUploadCSV(
   const actividades: Actividad[] = [];
   
   // Procesar cada línea (excepto la primera que son los headers)
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
+  for (let i = 1; i < lineasSinComentarios.length; i++) {
+    const line = lineasSinComentarios[i].trim();
     if (!line) continue;
     
     const values = line.split(',').map(v => v.trim());
@@ -536,8 +583,8 @@ export function processBulkUploadCSV(
       continue;
     }
     
-    if (!actividadData.titulo) {
-      errores.push(`Línea ${i + 1} (${actividadData.codigo}): Falta título`);
+    if (!actividadData.tipo) {
+      errores.push(`Línea ${i + 1} (${actividadData.codigo}): Falta tipo de actividad`);
       actividadesConError++;
       continue;
     }
@@ -546,6 +593,15 @@ export function processBulkUploadCSV(
       errores.push(`Línea ${i + 1} (${actividadData.codigo}): Falta fecha`);
       actividadesConError++;
       continue;
+    }
+    
+    // Convertir ID de tipo a nombre completo
+    let tipoActividad: TipoActividad;
+    if (TIPO_ID_MAP[actividadData.tipo]) {
+      tipoActividad = TIPO_ID_MAP[actividadData.tipo];
+    } else {
+      // Si no es un ID válido, intentar usar como nombre directo
+      tipoActividad = actividadData.tipo as TipoActividad;
     }
     
     // Validar y formatear la fecha
@@ -560,7 +616,7 @@ export function processBulkUploadCSV(
     const nuevaActividad: Actividad = {
       id: Date.now().toString() + '-' + i,
       codigo: actividadData.codigo,
-      tipo: actividadData.tipo || 'Patrullaje de Control y Vigilancia',
+      tipo: tipoActividad,
       descripcion: actividadData.descripcion || '',
       fecha: fechaFormateada,
       horaInicio: actividadData.horaInicio || '08:00',

@@ -530,6 +530,104 @@ app.get("/make-server-276018ed/dashboard/areas", async (c) => {
 });
 
 /**
+ * 🌳 ENDPOINT: Obtener todos los ecosistemas
+ * 
+ * Consulta la tabla ecosistema para obtener todos los tipos disponibles
+ * 
+ * @route GET /make-server-276018ed/ecosistemas
+ * @returns Array de ecosistemas
+ */
+app.get("/make-server-276018ed/ecosistemas", async (c) => {
+  try {
+    const accessToken = c.req.header('Authorization')?.split(' ')[1];
+    
+    if (!accessToken) {
+      return c.json({ 
+        success: false,
+        error: "No autorizado - Token requerido" 
+      }, 401);
+    }
+
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_ANON_KEY')!,
+      { global: { headers: { Authorization: `Bearer ${accessToken}` } } }
+    );
+
+    const { data: ecosistemas, error } = await supabase
+      .from('ecosistema')
+      .select('ecs_id, ecs_nombre')
+      .order('ecs_nombre', { ascending: true });
+
+    if (error) {
+      console.error('Error al obtener ecosistemas:', error);
+      return c.json({ 
+        success: false,
+        error: "Error al obtener ecosistemas" 
+      }, 500);
+    }
+
+    return c.json(ecosistemas || []);
+
+  } catch (error) {
+    console.error('Error en /ecosistemas:', error);
+    return c.json({ 
+      success: false,
+      error: "Error interno del servidor" 
+    }, 500);
+  }
+});
+
+/**
+ * 🗺️ ENDPOINT: Obtener todos los departamentos
+ * 
+ * Consulta la tabla departamento para obtener todos los departamentos disponibles
+ * 
+ * @route GET /make-server-276018ed/departamentos
+ * @returns Array de departamentos
+ */
+app.get("/make-server-276018ed/departamentos", async (c) => {
+  try {
+    const accessToken = c.req.header('Authorization')?.split(' ')[1];
+    
+    if (!accessToken) {
+      return c.json({ 
+        success: false,
+        error: "No autorizado - Token requerido" 
+      }, 401);
+    }
+
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_ANON_KEY')!,
+      { global: { headers: { Authorization: `Bearer ${accessToken}` } } }
+    );
+
+    const { data: departamentos, error } = await supabase
+      .from('departamento')
+      .select('dpt_id, dpt_nombre')
+      .order('dpt_nombre', { ascending: true });
+
+    if (error) {
+      console.error('Error al obtener departamentos:', error);
+      return c.json({ 
+        success: false,
+        error: "Error al obtener departamentos" 
+      }, 500);
+    }
+
+    return c.json(departamentos || []);
+
+  } catch (error) {
+    console.error('Error en /departamentos:', error);
+    return c.json({ 
+      success: false,
+      error: "Error interno del servidor" 
+    }, 500);
+  }
+});
+
+/**
  * 🔑 ENDPOINT: Obtener usuario por email
  * 
  * Este endpoint se llama después de la autenticación exitosa en Supabase Auth

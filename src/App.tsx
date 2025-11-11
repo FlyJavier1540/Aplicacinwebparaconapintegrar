@@ -8,7 +8,7 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { Toaster } from './components/ui/sonner';
 import { CambiarContrasena } from './components/CambiarContrasena';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from './components/ui/dropdown-menu';
-import conapLogo from 'figma:asset/fdba91156d85a5c8ad358d0ec261b66438776557.png';
+import { conapLogo } from './src/logo';
 import { filterNavigationByRole, getModulePermissions, type UserRole } from './utils/permissions';
 import { dashboardStyles, headerStyles, containerStyles } from './styles/shared-styles';
 import { setAuthToken, getAuthToken, removeAuthToken } from './utils/base-api-service';

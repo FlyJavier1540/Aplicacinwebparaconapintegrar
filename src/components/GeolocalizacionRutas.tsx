@@ -27,7 +27,7 @@ import { authService } from '../utils/authService';
 import { Alert, AlertDescription } from './ui/alert';
 import { forceLogout } from '../utils/base-api-service';
 import { generarReportePDF, convertirImagenABase64 } from '../utils/reportePatrullajesHelpers';
-import conapLogo from 'figma:asset/fdba91156d85a5c8ad358d0ec261b66438776557.png';
+import { conapLogo } from '../src/logo';
 import { toast } from 'sonner@2.0.3';
 
 // ============================================================================

@@ -8,7 +8,7 @@ import { Eye, EyeOff } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import { SupabaseSetupHelper } from './SupabaseSetupHelper';
 import { InitDataBanner } from './InitDataBanner';
-import conapLogo from 'figma:asset/fdba91156d85a5c8ad358d0ec261b66438776557.png';
+import { conapLogo } from '../src/logo';
 import { motion, AnimatePresence } from 'motion/react';
 import { loginStyles } from '../styles/shared-styles';
 import { authService } from '../utils/authService';
