@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback, memo } from 'react';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -6,11 +6,10 @@ import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Search, Route, Navigation, Eye, Calendar, User, FileText } from 'lucide-react';
-import { guardarecursos, areasProtegidas } from '../data/mock-data';
-import { Actividad } from '../types';
+import { Search, Route, Navigation, Eye, Calendar, User, FileText, Loader2, AlertCircle } from 'lucide-react';
+import { Actividad, Guardarecurso } from '../types';
 import { motion } from 'motion/react';
-import { actividadesSync } from '../utils/actividadesSync';
+import { GoogleMap, Marker, Polyline, useJsApiLoader } from '@react-google-maps/api';
 import { 
   filterStyles, 
   listCardStyles, 
@@ -22,6 +21,63 @@ import {
   getActividadTopLineColor 
 } from '../styles/shared-styles';
 import { geolocalizacionService } from '../utils/geolocalizacionService';
+import { guardarecursosService } from '../utils/guardarecursosService';
+import { areasProtegidasService } from '../utils/areasProtegidasService';
+import { authService } from '../utils/authService';
+import { Alert, AlertDescription } from './ui/alert';
+import { forceLogout } from '../utils/base-api-service';
+import { generarReportePDF, convertirImagenABase64 } from '../utils/reportePatrullajesHelpers';
+import conapLogo from 'figma:asset/fdba91156d85a5c8ad358d0ec261b66438776557.png';
+import { toast } from 'sonner@2.0.3';
+
+// ============================================================================
+// COMPONENTES MEMOIZADOS INTERNOS - Optimización de re-renders
+// ============================================================================
+
+const LoadingState = memo(() => (
+  <Card className="border-0 shadow-lg">
+    <CardContent className="p-8 sm:p-12">
+      <div className="text-center">
+        <Loader2 className="h-12 w-12 sm:h-16 sm:w-16 mx-auto mb-3 sm:mb-4 text-muted-foreground animate-spin" />
+        <h3 className="mb-2 text-sm sm:text-base">Cargando rutas...</h3>
+        <p className="text-xs sm:text-sm text-muted-foreground">
+          Obteniendo datos de geolocalización desde la base de datos
+        </p>
+      </div>
+    </CardContent>
+  </Card>
+));
+LoadingState.displayName = 'LoadingState';
+
+interface EmptyStateProps {
+  searchTerm: string;
+  onClearSearch: () => void;
+}
+
+const EmptyState = memo(({ searchTerm, onClearSearch }: EmptyStateProps) => (
+  <Card className="border-0 shadow-lg">
+    <CardContent className="p-8 sm:p-12">
+      <div className="text-center">
+        <Route className="h-12 w-12 sm:h-16 sm:w-16 mx-auto mb-3 sm:mb-4 text-muted-foreground opacity-30" />
+        <h3 className="mb-2 text-sm sm:text-base">No hay rutas disponibles</h3>
+        <p className="text-xs sm:text-sm text-muted-foreground mb-4">
+          {searchTerm 
+            ? 'No se encontraron rutas que coincidan con tu búsqueda'
+            : 'No hay rutas de patrullaje completadas en el sistema'}
+        </p>
+        {searchTerm && (
+          <Button 
+            variant="outline" 
+            onClick={onClearSearch}
+          >
+            Limpiar búsqueda
+          </Button>
+        )}
+      </div>
+    </CardContent>
+  </Card>
+));
+EmptyState.displayName = 'EmptyState';
 
 interface GeolocalizacionRutasProps {
   userPermissions: {
@@ -34,10 +90,19 @@ interface GeolocalizacionRutasProps {
 }
 
 export function GeolocalizacionRutas({ userPermissions, currentUser }: GeolocalizacionRutasProps) {
-  const [actividadesList, setActividadesList] = useState<Actividad[]>([]);
+  // Cargar Google Maps API
+  const { isLoaded: isGoogleMapsLoaded } = useJsApiLoader({
+    googleMapsApiKey: 'AIzaSyC1XVfrE8CmVg3nhd-6Sps087JmARuSNWc',
+  });
+
+  const [rutas, setRutas] = useState<Actividad[]>([]);
+  const [guardarecursos, setGuardarecursos] = useState<Guardarecurso[]>([]);
+  const [areasProtegidas, setAreasProtegidas] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedRuta, setSelectedRuta] = useState<Actividad | null>(null);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   // Estados para el reporte
   const [isReportDialogOpen, setIsReportDialogOpen] = useState(false);
@@ -45,35 +110,86 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
   const [reportFechaInicio, setReportFechaInicio] = useState('');
   const [reportFechaFin, setReportFechaFin] = useState('');
 
-  // Determinar si el usuario actual es un guardarecurso
-  const isGuardarecurso = currentUser?.rol === 'Guardarecurso';
-  const currentGuardarecursoId = isGuardarecurso ? currentUser?.id : null;
+  // Determinar si el usuario actual es un guardarecurso - MEMOIZADO
+  const isGuardarecurso = useMemo(() => currentUser?.rol === 'Guardarecurso', [currentUser?.rol]);
+  const currentGuardarecursoId = useMemo(() => isGuardarecurso ? currentUser?.id : null, [isGuardarecurso, currentUser?.id]);
 
-  // Suscribirse a cambios en actividades
+  // Filtrar solo guardarecursos ACTIVOS y ordenar alfabéticamente - MEMOIZADO
+  const guardarecursosOrdenados = useMemo(() => {
+    return [...guardarecursos]
+      .filter(g => g.estado === 'Activo')
+      .sort((a, b) => {
+        const nombreA = `${a.nombre} ${a.apellido}`;
+        const nombreB = `${b.nombre} ${b.apellido}`;
+        return nombreA.localeCompare(nombreB, 'es');
+      });
+  }, [guardarecursos]);
+
+  // Cargar rutas y guardarecursos desde la base de datos - MEMOIZADO
+  const loadData = useCallback(async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+
+        const token = authService.getCurrentToken();
+        if (!token) {
+          setError('No hay sesión activa');
+          setIsLoading(false);
+          return;
+        }
+
+        // Cargar guardarecursos
+        const guardarecursosData = await guardarecursosService.fetchGuardarecursos(token);
+        setGuardarecursos(guardarecursosData);
+
+        // Cargar áreas protegidas (usa getRequiredAuthToken() internamente)
+        const areasData = await areasProtegidasService.fetchAreas();
+        setAreasProtegidas(areasData);
+
+        // Cargar rutas (si es guardarecurso, filtrar por su ID)
+        const filters = isGuardarecurso && currentGuardarecursoId 
+          ? { guardarecurso: currentGuardarecursoId }
+          : undefined;
+        
+        const rutasData = await geolocalizacionService.fetchRutas(token, filters);
+        setRutas(rutasData);
+
+      } catch (err) {
+        console.error('❌ ERROR AL CARGAR GEOLOCALIZACIÓN - FORZANDO LOGOUT:', err);
+        forceLogout();
+      } finally {
+        setIsLoading(false);
+      }
+  }, [isGuardarecurso, currentGuardarecursoId]);
+
   useEffect(() => {
-    const unsubscribe = actividadesSync.subscribe((actividades) => {
-      setActividadesList(actividades);
-    });
+    loadData();
+  }, [loadData]);
 
-    return unsubscribe;
-  }, []);
-
-  // Filtrar rutas completadas usando el servicio
+  // Filtrar y ordenar rutas por término de búsqueda
   const rutasCompletadas = useMemo(() => {
-    return geolocalizacionService.filterRutasCompletadas(
-      actividadesList,
-      searchTerm,
-      isGuardarecurso,
-      currentGuardarecursoId
-    );
-  }, [actividadesList, isGuardarecurso, currentGuardarecursoId, searchTerm]);
+    let rutasFiltradas = searchTerm 
+      ? rutas.filter(ruta =>
+          ruta.descripcion.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          ruta.codigo?.toLowerCase().includes(searchTerm.toLowerCase())
+        )
+      : rutas;
+    
+    // Ordenar de más reciente a más antigua por fecha de finalización
+    return rutasFiltradas.sort((a, b) => {
+      const dateA = new Date(`${a.fecha}T${a.horaFin || '23:59'}`);
+      const dateB = new Date(`${b.fecha}T${b.horaFin || '23:59'}`);
+      return dateB.getTime() - dateA.getTime(); // Orden descendente (más reciente primero)
+    });
+  }, [rutas, searchTerm]);
 
-  const handleViewRuta = (actividad: Actividad) => {
+  // Handlers - MEMOIZADOS
+  const handleViewRuta = useCallback((actividad: Actividad) => {
     setSelectedRuta(actividad);
     setIsViewDialogOpen(true);
-  };
+  }, []);
 
-  const handleGenerarReporte = () => {
+  const handleGenerarReporte = useCallback(async () => {
     // Validar parámetros usando el servicio
     const validacion = geolocalizacionService.validarParametrosReporte({
       guardarecurso: reportGuardarecurso,
@@ -95,33 +211,56 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
         fechaFin: reportFechaFin
       }
     );
-    
-    // Generar contenido del reporte usando el servicio
-    const reportContent = geolocalizacionService.generarContenidoReporte(
-      rutasParaReporte,
-      guardarecursos,
-      areasProtegidas,
-      {
-        guardarecurso: reportGuardarecurso,
-        fechaInicio: reportFechaInicio,
-        fechaFin: reportFechaFin
-      }
-    );
-    
-    // Descargar reporte usando el servicio
-    geolocalizacionService.descargarReporte(reportContent);
+
+    try {
+      // Convertir logo a Base64
+      const logoBase64 = await convertirImagenABase64(conapLogo);
+      
+      // Generar PDF con el diseño oficial usando áreas protegidas reales de la BD
+      await generarReportePDF(
+        rutasParaReporte,
+        guardarecursos,
+        areasProtegidas, // Usar áreas protegidas reales cargadas de la BD
+        reportGuardarecurso,
+        reportFechaInicio,
+        reportFechaFin,
+        logoBase64
+      );
+      
+      // Mostrar mensaje de éxito
+      toast.success('Reporte generado', {
+        description: 'El reporte PDF se ha descargado correctamente.'
+      });
+    } catch (error) {
+      console.error('Error al generar PDF:', error);
+      toast.error('Error al generar reporte', {
+        description: 'No se pudo generar el PDF. Intenta de nuevo.'
+      });
+    }
     
     // Cerrar el diálogo
     setIsReportDialogOpen(false);
-  };
+  }, [rutasCompletadas, guardarecursos, areasProtegidas, reportGuardarecurso, reportFechaInicio, reportFechaFin]);
 
-  // Calcular estadísticas usando el servicio
+  // Calcular estadísticas usando el servicio - MEMOIZADO
   const estadisticas = useMemo(() => {
     return geolocalizacionService.calcularEstadisticasRutas(rutasCompletadas);
   }, [rutasCompletadas]);
 
-  const renderRutaCard = (actividad: Actividad, index: number) => {
-    const guardarecurso = guardarecursos.find(g => g.id === actividad.guardarecurso);
+  // Crear mapa de guardarecursos para búsqueda O(1) - OPTIMIZADO
+  const guardarecursosMap = useMemo(() => {
+    const map: Record<string, Guardarecurso> = {};
+    guardarecursos.forEach(g => {
+      map[g.id] = g;
+    });
+    return map;
+  }, [guardarecursos]);
+
+  // Función de renderizado memoizada
+  const renderRutaCard = useCallback((actividad: Actividad, index: number) => {
+    const guardarecurso = guardarecursosMap[actividad.guardarecurso];
+    const nombreGuardarecurso = (actividad as any).guardarecursoNombre || 
+      (guardarecurso ? `${guardarecurso.nombre} ${guardarecurso.apellido}` : 'Sin asignar');
     
     return (
       <motion.div
@@ -156,11 +295,11 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
               </div>
 
               {/* Guardarecurso */}
-              {guardarecurso && !isGuardarecurso && (
+              {!isGuardarecurso && (
                 <div className={listCardStyles.infoItem}>
                   <User className={listCardStyles.infoIcon} />
                   <div className={listCardStyles.infoText}>
-                    <div>{guardarecurso.nombre} {guardarecurso.apellido}</div>
+                    <div>{nombreGuardarecurso}</div>
                   </div>
                 </div>
               )}
@@ -180,10 +319,23 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
         </Card>
       </motion.div>
     );
-  };
+  }, [guardarecursosMap, isGuardarecurso, handleViewRuta]);
+
+  // Handler para limpiar búsqueda - MEMOIZADO
+  const handleClearSearch = useCallback(() => {
+    setSearchTerm('');
+  }, []);
 
   return (
     <div className="space-y-4">
+      {/* Error Alert */}
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
       {/* Búsqueda - Diseño Minimalista sin filtros */}
       <div className={filterStyles.filterGroupNoBorder}>
         {/* Búsqueda */}
@@ -214,26 +366,10 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
       <div className="grid grid-cols-1 gap-4">
         {/* Grid de rutas */}
         <div>
-          {rutasCompletadas.length === 0 ? (
-            <Card className="border-0 shadow-lg">
-              <CardContent className="p-8 sm:p-12">
-                <div className="text-center">
-                  <Route className="h-12 w-12 sm:h-16 sm:w-16 mx-auto mb-3 sm:mb-4 text-muted-foreground opacity-30" />
-                  <h3 className="mb-2 text-sm sm:text-base">No hay rutas disponibles</h3>
-                  <p className="text-xs sm:text-sm text-muted-foreground mb-4">
-                    {searchTerm 
-                      ? 'No se encontraron rutas que coincidan con tu búsqueda'
-                      : 'No hay rutas de patrullaje completadas en el sistema'}
-                  </p>
-                  <Button 
-                    variant="outline" 
-                    onClick={() => setSearchTerm('')}
-                  >
-                    Limpiar búsqueda
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+          {isLoading ? (
+            <LoadingState />
+          ) : rutasCompletadas.length === 0 ? (
+            <EmptyState searchTerm={searchTerm} onClearSearch={handleClearSearch} />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
               {rutasCompletadas.map((actividad, index) => renderRutaCard(actividad, index))}
@@ -256,6 +392,8 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
           
           {selectedRuta && (() => {
             const guardarecurso = guardarecursos.find(g => g.id === selectedRuta.guardarecurso);
+            const nombreGuardarecurso = (selectedRuta as any).guardarecursoNombre || 
+              (guardarecurso ? `${guardarecurso.nombre} ${guardarecurso.apellido}` : 'Sin asignar');
             
             return (
               <div className={formStyles.form}>
@@ -289,7 +427,7 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
                   <div className={formStyles.field}>
                     <Label className={formStyles.label}>Usuario</Label>
                     <p className={formStyles.readOnlyValue}>
-                      {guardarecurso ? `${guardarecurso.nombre} ${guardarecurso.apellido}` : 'No asignado'}
+                      {nombreGuardarecurso}
                     </p>
                   </div>
                 </div>
@@ -304,115 +442,163 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
                     </Label>
                   </div>
                   
-                  {/* Mapa SVG - Usando el servicio para convertir coordenadas */}
+                  {/* Mapa de Google Maps con la ruta completa */}
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-900/50">
-                    <svg viewBox="0 0 400 300" className="w-full h-auto">
-                      {/* Fondo limpio */}
-                      <rect width="400" height="300" fill="currentColor" className="text-gray-50 dark:text-gray-900/50" />
+                    {isGoogleMapsLoaded ? (() => {
+                      // Construir puntos completos: inicio + intermedios + fin
+                      const puntosCompletos = geolocalizacionService.construirPuntosCompletos(selectedRuta);
                       
-                      {(() => {
-                        // Convertir ruta a coordenadas SVG usando el servicio
-                        const puntosSVG = geolocalizacionService.convertirRutaASVG(selectedRuta.ruta!);
-                        const pathD = geolocalizacionService.generarPathSVG(puntosSVG);
-                        
+                      if (puntosCompletos.length === 0) {
                         return (
-                          <>
-                            {/* Línea de la ruta */}
-                            <path
-                              d={pathD}
-                              stroke="currentColor"
-                              strokeWidth="2.5"
-                              fill="none"
-                              className="text-blue-500 dark:text-blue-400"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
+                          <div className="h-[400px] flex items-center justify-center">
+                            <div className="text-center text-gray-500 dark:text-gray-400">
+                              <Navigation className="h-12 w-12 mx-auto mb-2 opacity-30" />
+                              <p className="text-sm">Sin datos GPS</p>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // Calcular el centro del mapa (punto medio entre inicio y fin)
+                      const center = {
+                        lat: (puntosCompletos[0].lat + puntosCompletos[puntosCompletos.length - 1].lat) / 2,
+                        lng: (puntosCompletos[0].lng + puntosCompletos[puntosCompletos.length - 1].lng) / 2,
+                      };
+
+                      // Crear la ruta para la polilínea
+                      const rutaPath = puntosCompletos.map(punto => ({ lat: punto.lat, lng: punto.lng }));
+
+                      return (
+                        <>
+                          <GoogleMap
+                            mapContainerStyle={{ width: '100%', height: '400px' }}
+                            center={center}
+                            zoom={12}
+                            onLoad={(map) => {
+                              // Ajustar el mapa para que se vea toda la ruta
+                              const bounds = new window.google.maps.LatLngBounds();
+                              puntosCompletos.forEach(punto => {
+                                bounds.extend({ lat: punto.lat, lng: punto.lng });
+                              });
+                              map.fitBounds(bounds, { top: 50, bottom: 50, left: 50, right: 50 });
+                            }}
+                            options={{
+                              mapTypeControl: false,
+                              streetViewControl: false,
+                              fullscreenControl: false,
+                              zoomControl: true,
+                              styles: [
+                                {
+                                  featureType: 'poi',
+                                  elementType: 'labels',
+                                  stylers: [{ visibility: 'off' }]
+                                }
+                              ]
+                            }}
+                          >
+                            {/* Polilínea de la ruta */}
+                            <Polyline
+                              path={rutaPath}
+                              options={{
+                                strokeColor: '#3b82f6',
+                                strokeOpacity: 1,
+                                strokeWeight: 3,
+                              }}
                             />
-                            
-                            {/* Puntos de la ruta */}
-                            {puntosSVG.map((point, index) => (
-                              <g key={index}>
-                                <circle
-                                  cx={point.x}
-                                  cy={point.y}
-                                  r="5"
-                                  fill="currentColor"
-                                  className={
-                                    index === 0 
-                                      ? "text-green-500 dark:text-green-400" 
-                                      : index === puntosSVG.length - 1 
-                                      ? "text-red-500 dark:text-red-400" 
-                                      : "text-blue-500 dark:text-blue-400"
+
+                            {/* Marcadores para cada punto */}
+                            {puntosCompletos.map((punto, index) => {
+                              const esInicio = index === 0;
+                              const esFin = index === puntosCompletos.length - 1;
+                              const esIntermedio = !esInicio && !esFin;
+
+                              return (
+                                <Marker
+                                  key={index}
+                                  position={{ lat: punto.lat, lng: punto.lng }}
+                                  icon={{
+                                    path: window.google.maps.SymbolPath.CIRCLE,
+                                    fillColor: esInicio ? '#10b981' : esFin ? '#ef4444' : '#3b82f6',
+                                    fillOpacity: 1,
+                                    strokeColor: '#ffffff',
+                                    strokeWeight: 2,
+                                    scale: esInicio || esFin ? 10 : 6,
+                                  }}
+                                  label={
+                                    esInicio
+                                      ? { text: 'Inicio', color: '#065f46', fontSize: '11px', fontWeight: 'bold' }
+                                      : esFin
+                                      ? { text: 'Fin', color: '#991b1b', fontSize: '11px', fontWeight: 'bold' }
+                                      : undefined
                                   }
                                 />
-                                
-                                {/* Etiqueta de Inicio - posicionada arriba */}
-                                {index === 0 && (
-                                  <text
-                                    x={point.x}
-                                    y={point.y - 12}
-                                    textAnchor="middle"
-                                    className="text-xs fill-green-600 dark:fill-green-400"
-                                    style={{ fontWeight: 600 }}
-                                  >
-                                    Inicio
-                                  </text>
-                                )}
-                                
-                                {/* Etiqueta de Fin - posicionada abajo */}
-                                {index === puntosSVG.length - 1 && (
-                                  <text
-                                    x={point.x}
-                                    y={point.y + 18}
-                                    textAnchor="middle"
-                                    className="text-xs fill-red-600 dark:fill-red-400"
-                                    style={{ fontWeight: 600 }}
-                                  >
-                                    Fin
-                                  </text>
-                                )}
-                              </g>
-                            ))}
-                          </>
-                        );
-                      })()}
-                    </svg>
-                    
-                    {/* Leyenda minimalista */}
-                    <div className="flex items-center justify-center gap-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-950">
-                      <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
-                        <div className="w-2.5 h-2.5 rounded-full bg-green-500"></div>
-                        Punto Inicial
+                              );
+                            })}
+                          </GoogleMap>
+
+                          {/* Leyenda minimalista */}
+                          <div className="flex items-center justify-center gap-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-950">
+                            <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+                              <div className="w-2.5 h-2.5 rounded-full bg-green-500"></div>
+                              Punto Inicial
+                            </div>
+                            <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+                              <div className="w-2.5 h-2.5 rounded-full bg-blue-500"></div>
+                              Recorrido
+                            </div>
+                            <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+                              <div className="w-2.5 h-2.5 rounded-full bg-red-500"></div>
+                              Punto Final
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })() : (
+                      <div className="h-[400px] flex items-center justify-center">
+                        <div className="text-center">
+                          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-green-600 dark:border-green-400 mx-auto mb-2"></div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Cargando mapa...</p>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
-                        <div className="w-2.5 h-2.5 rounded-full bg-blue-500"></div>
-                        Recorrido
-                      </div>
-                      <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
-                        <div className="w-2.5 h-2.5 rounded-full bg-red-500"></div>
-                        Punto Final
-                      </div>
-                    </div>
+                    )}
                   </div>
                   
-                  {/* Estadísticas usando el servicio */}
+                  {/* Estadísticas usando cálculos reales */}
                   <div className="grid grid-cols-3 gap-3 mt-4">
                     <div className="flex flex-col items-center p-2.5 rounded-lg border border-gray-200 dark:border-gray-700">
                       <p className="text-2xl text-gray-900 dark:text-gray-100 mb-0.5">
-                        {selectedRuta.ruta!.length}
+                        {(() => {
+                          const puntosCompletos = geolocalizacionService.construirPuntosCompletos(selectedRuta);
+                          return puntosCompletos.length;
+                        })()}
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-400">Puntos GPS</p>
                     </div>
                     
                     <div className="flex flex-col items-center p-2.5 rounded-lg border border-gray-200 dark:border-gray-700">
                       <p className="text-2xl text-gray-900 dark:text-gray-100 mb-0.5">
-                        {geolocalizacionService.calcularDuracionRuta(selectedRuta.ruta!.length)} min
+                        {(() => {
+                          const duracion = geolocalizacionService.calcularDuracionReal(
+                            selectedRuta.fechaHoraInicio,
+                            selectedRuta.fechaHoraFin
+                          );
+                          return duracion !== null ? `${duracion}` : '0';
+                        })()} min
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-400">Duración</p>
                     </div>
                     
                     <div className="flex flex-col items-center p-2.5 rounded-lg border border-gray-200 dark:border-gray-700">
                       <p className="text-2xl text-gray-900 dark:text-gray-100 mb-0.5">
-                        {geolocalizacionService.calcularDistanciaRuta()} km
+                        {(() => {
+                          const distancia = geolocalizacionService.calcularDistanciaHaversine(
+                            selectedRuta.coordenadasInicio?.lat,
+                            selectedRuta.coordenadasInicio?.lng,
+                            selectedRuta.coordenadasFin?.lat,
+                            selectedRuta.coordenadasFin?.lng
+                          );
+                          return distancia !== null ? distancia : '0.0';
+                        })()} km
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-400">Distancia</p>
                     </div>
@@ -483,7 +669,7 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
                   <SelectValue placeholder="Seleccionar guardarecurso" />
                 </SelectTrigger>
                 <SelectContent>
-                  {guardarecursos.map(g => (
+                  {guardarecursosOrdenados.map(g => (
                     <SelectItem key={g.id} value={g.id}>
                       {g.nombre} {g.apellido}
                     </SelectItem>

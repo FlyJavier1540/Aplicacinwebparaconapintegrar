@@ -3,10 +3,15 @@ import { reporteActividadesService, GuardarecursoData } from '../utils/reporteAc
 
 interface ReporteActividadesMensualProps {
   guardarecurso: GuardarecursoData;
+  areaNombre: string;
 }
 
-export function generarReporteActividadesMensual({ guardarecurso }: ReporteActividadesMensualProps) {
-  const result = reporteActividadesService.generarReporteActividadesMensual(guardarecurso);
+/**
+ * Genera un reporte mensual de actividades en PDF
+ * ACTUALIZADO: Ya no usa mock-data, recibe el nombre del área desde base de datos
+ */
+export function generarReporteActividadesMensual({ guardarecurso, areaNombre }: ReporteActividadesMensualProps) {
+  const result = reporteActividadesService.generarReporteActividadesMensual(guardarecurso, areaNombre);
   
   if (result.success) {
     toast.success('Reporte generado exitosamente', {

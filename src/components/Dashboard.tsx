@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback, memo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapaAreasProtegidas } from './MapaAreasProtegidas';
 import { AreaProtegidaDetalle } from './AreaProtegidaDetalle';
@@ -11,18 +11,91 @@ import {
   Target,
   X,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  LucideIcon
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 import { cardStyles, layoutStyles } from '../styles/shared-styles';
-import { dashboardService, DashboardEstadisticas } from '../utils/dashboardService';
-import { getErrorMessage } from '../utils/base-api-service';
+import { dashboardService, DashboardEstadisticas, EstadisticaCard } from '../utils/dashboardService';
+import { forceLogout } from '../utils/base-api-service';
 
 interface DashboardProps {
   onNavigate?: (section: string) => void;
   currentUser?: any;
 }
+
+// ===== COMPONENTES MEMOIZADOS =====
+
+/**
+ * Componente memoizado para tarjetas de estadísticas
+ * Solo se re-renderiza si cambian sus props específicas
+ */
+interface StatCardProps {
+  stat: EstadisticaCard;
+  Icon: LucideIcon;
+  index: number;
+  onNavigate?: (section: string) => void;
+  isMobile?: boolean;
+}
+
+const StatCard = memo(({ stat, Icon, index, onNavigate, isMobile }: StatCardProps) => {
+  const handleClick = useCallback(() => {
+    onNavigate?.(stat.section);
+  }, [onNavigate, stat.section]);
+
+  if (isMobile) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, delay: index * 0.05 }}
+      >
+        <Card 
+          onClick={handleClick}
+          className={`${stat.gradient} ${stat.border} shadow-sm cursor-pointer transition-all duration-300 hover:shadow-md active:scale-95`}
+        >
+          <CardContent className="p-3 sm:p-4">
+            <div className="flex flex-col items-center justify-center gap-1.5 sm:gap-2">
+              <Icon className={`h-7 w-7 sm:h-9 sm:w-9 ${stat.iconColor}`} />
+              <div className="text-center">
+                <p className={`text-2xl sm:text-3xl ${stat.textColor} mb-0.5 sm:mb-1`}>{stat.value}</p>
+                <p className={`text-[10px] ${stat.textColor} opacity-70`}>{stat.title}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.3, delay: index * 0.05 }}
+    >
+      <Card 
+        onClick={handleClick}
+        className={`${stat.gradient} ${stat.border} ${cardStyles.dashboardCard} h-full flex flex-col`}
+      >
+        <CardContent className="p-4 flex-1 flex items-center justify-center">
+          <div className="flex flex-col items-center justify-center gap-2">
+            <Icon className={`h-9 w-9 ${stat.iconColor}`} />
+            <div className="text-center">
+              <p className={`text-3xl ${stat.textColor} mb-1`}>{stat.value}</p>
+              <p className={`text-[10px] ${stat.textColor} opacity-70 leading-tight`}>{stat.title}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+});
+
+StatCard.displayName = 'StatCard';
+
+// ===== COMPONENTE PRINCIPAL =====
 
 export function Dashboard({ onNavigate, currentUser }: DashboardProps) {
   const [selectedArea, setSelectedArea] = useState<AreaProtegida | null>(null);
@@ -31,15 +104,12 @@ export function Dashboard({ onNavigate, currentUser }: DashboardProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Cargar datos al montar el componente
-  useEffect(() => {
-    loadDashboardData();
-  }, []);
-
   /**
-   * Carga todos los datos del dashboard desde el backend
+   * Carga todos los datos del dashboard desde Supabase
+   * Memoizado para evitar recreación en cada render
+   * 🔒 SEGURIDAD: Si hay error, fuerza logout
    */
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -53,33 +123,40 @@ export function Dashboard({ onNavigate, currentUser }: DashboardProps) {
       setEstadisticas(statsData);
       setAreas(areasData);
     } catch (err) {
-      console.error('Error al cargar datos del dashboard:', err);
-      setError(getErrorMessage(err));
+      console.error('❌ ERROR AL CARGAR DASHBOARD - FORZANDO LOGOUT:', err);
+      forceLogout();
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const handleAreaSelect = (area: AreaProtegida) => {
+  // Cargar datos al montar el componente
+  useEffect(() => {
+    loadDashboardData();
+  }, [loadDashboardData]);
+
+  // Handlers memoizados
+  const handleAreaSelect = useCallback((area: AreaProtegida) => {
     setSelectedArea(area);
-  };
+  }, []);
 
-  const handleCloseDetail = () => {
+  const handleCloseDetail = useCallback(() => {
     setSelectedArea(null);
-  };
+  }, []);
 
-  // Construir configuración de tarjetas (solo si hay estadísticas)
-  const estadisticasPrincipales = estadisticas 
-    ? dashboardService.buildEstadisticasCards(estadisticas)
-    : [];
-
-  // Mapeo de iconos
-  const iconMapping = {
+  // Mapeo de iconos (memoizado para evitar recreación)
+  const iconMapping = useMemo(() => ({
     'asignacion-zonas': Globe,
     'registro-guarda': Users,
     'planificacion': Activity,
     'registro-diario': Target
-  };
+  }), []);
+
+  // Construir configuración de tarjetas (memoizado)
+  const estadisticasPrincipales = useMemo(() => 
+    estadisticas ? dashboardService.buildEstadisticasCards(estadisticas) : [],
+    [estadisticas]
+  );
 
   // Estado de carga
   if (loading) {
@@ -138,27 +215,14 @@ export function Dashboard({ onNavigate, currentUser }: DashboardProps) {
             const IconComponent = iconMapping[stat.section as keyof typeof iconMapping];
             
             return (
-              <motion.div
-                key={stat.title}
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.3, delay: index * 0.05 }}
-              >
-                <Card 
-                  onClick={() => onNavigate?.(stat.section)}
-                  className={`${stat.gradient} ${stat.border} ${cardStyles.dashboardCard} h-full flex flex-col`}
-                >
-                  <CardContent className="p-4 flex-1 flex items-center justify-center">
-                    <div className="flex flex-col items-center justify-center gap-2">
-                      <IconComponent className={`h-9 w-9 ${stat.iconColor}`} />
-                      <div className="text-center">
-                        <p className={`text-3xl ${stat.textColor} mb-1`}>{stat.value}</p>
-                        <p className={`text-[10px] ${stat.textColor} opacity-70 leading-tight`}>{stat.title}</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </motion.div>
+              <StatCard
+                key={stat.section}
+                stat={stat}
+                Icon={IconComponent}
+                index={index}
+                onNavigate={onNavigate}
+                isMobile={false}
+              />
             );
           })}
           </div>
@@ -172,27 +236,14 @@ export function Dashboard({ onNavigate, currentUser }: DashboardProps) {
             const IconComponent = iconMapping[stat.section as keyof typeof iconMapping];
             
             return (
-              <motion.div
-                key={stat.title}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: index * 0.05 }}
-              >
-                <Card 
-                  onClick={() => onNavigate?.(stat.section)}
-                  className={`${stat.gradient} ${stat.border} shadow-sm cursor-pointer transition-all duration-300 hover:shadow-md active:scale-95`}
-                >
-                  <CardContent className="p-3 sm:p-4">
-                    <div className="flex flex-col items-center justify-center gap-1.5 sm:gap-2">
-                      <IconComponent className={`h-7 w-7 sm:h-9 sm:w-9 ${stat.iconColor}`} />
-                      <div className="text-center">
-                        <p className={`text-2xl sm:text-3xl ${stat.textColor} mb-0.5 sm:mb-1`}>{stat.value}</p>
-                        <p className={`text-[10px] ${stat.textColor} opacity-70`}>{stat.title}</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </motion.div>
+              <StatCard
+                key={stat.section}
+                stat={stat}
+                Icon={IconComponent}
+                index={index}
+                onNavigate={onNavigate}
+                isMobile={true}
+              />
             );
           })}
         </div>

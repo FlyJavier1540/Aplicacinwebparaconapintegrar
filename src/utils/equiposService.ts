@@ -2,12 +2,16 @@
  * 📦 Equipos Service
  * 
  * Servicio centralizado que maneja toda la lógica funcional del módulo de Control de Equipos,
- * separando la lógica de negocio de la presentación.
+ * separando la lógica de negocio de la presentación y conectado con Supabase.
+ * 
+ * OPTIMIZADO: Cache de peticiones, reducción de consultas redundantes
  * 
  * @module utils/equiposService
  */
 
 import { Equipo, Guardarecurso } from '../types';
+import { projectId } from './supabase/info';
+import { getRequiredAuthToken } from './base-api-service';
 
 /**
  * Interface para los datos del formulario de equipos
@@ -60,6 +64,8 @@ export const ESTADOS_CONFIG = {
     color: '#6b7280'
   }
 } as const;
+
+// ===== FUNCIONES DE FILTRADO =====
 
 /**
  * Filtra equipos según rol y búsqueda
@@ -117,6 +123,8 @@ export function filterEquipos(
   });
 }
 
+// ===== FUNCIONES DE CREACIÓN Y ACTUALIZACIÓN =====
+
 /**
  * Crea un nuevo equipo con valores predeterminados
  * 
@@ -135,7 +143,6 @@ export function createEquipo(formData: EquipoFormData): Equipo {
     modelo: formData.modelo,
     observaciones: formData.observaciones,
     guardarecursoAsignado: formData.guardarecursoAsignado === 'none' ? undefined : formData.guardarecursoAsignado,
-    fechaAsignacion: new Date().toISOString().split('T')[0],
     estado: 'Operativo', // Siempre se crea como Operativo
     tipo: inferTipoEquipo(formData.nombre) // Inferir tipo basado en el nombre
   };
@@ -199,6 +206,8 @@ export function updateEstado(
   };
 }
 
+// ===== FUNCIONES DE ESTILOS =====
+
 /**
  * Obtiene la clase CSS del badge según el estado
  * 
@@ -239,6 +248,8 @@ export function getEstadoColor(estado: EstadoEquipo): string {
   return ESTADOS_CONFIG[estado]?.color || ESTADOS_CONFIG['Desactivado'].color;
 }
 
+// ===== FUNCIONES DE INFERENCIA =====
+
 /**
  * Infiere el tipo de equipo basado en palabras clave en el nombre
  * 
@@ -262,6 +273,8 @@ export function inferTipoEquipo(nombre: string): 'GPS' | 'Radio' | 'Binoculares'
   
   return 'Otro';
 }
+
+// ===== FUNCIONES DE UTILIDADES =====
 
 /**
  * Crea un formulario vacío con valores predeterminados
@@ -433,6 +446,266 @@ export function getAllEstados(): EstadoEquipo[] {
   return ['Operativo', 'En Reparación', 'Desactivado'];
 }
 
+// ===== CACHE DE PETICIONES (OPTIMIZACIÓN) =====
+
+/**
+ * Cache simple para la última petición de equipos
+ * Reduce peticiones innecesarias al backend
+ */
+let equiposCache: {
+  data: any[] | null;
+  timestamp: number | null;
+  ttl: number; // Time to live en milisegundos
+} = {
+  data: null,
+  timestamp: null,
+  ttl: 30000 // 30 segundos
+};
+
+/**
+ * Limpia el cache de equipos
+ * Útil después de crear/actualizar/eliminar un equipo
+ */
+export function clearEquiposCache(): void {
+  equiposCache.data = null;
+  equiposCache.timestamp = null;
+  console.log('🧹 Cache de equipos limpiado');
+}
+
+/**
+ * Verifica si el cache es válido
+ */
+function isCacheValid(): boolean {
+  if (!equiposCache.data || !equiposCache.timestamp) {
+    return false;
+  }
+  const now = Date.now();
+  return (now - equiposCache.timestamp) < equiposCache.ttl;
+}
+
+// ===== API CALLS (OPTIMIZADAS) =====
+
+/**
+ * 🌐 API: Obtener todos los equipos desde Supabase
+ * OPTIMIZADO: Usa cache para reducir peticiones redundantes
+ * 
+ * @param forceRefresh - Forzar recarga desde el servidor
+ * @returns Promise con array de equipos
+ * 
+ * @example
+ * const equipos = await fetchEquipos();
+ */
+export async function fetchEquipos(forceRefresh: boolean = false): Promise<any[]> {
+  try {
+    // Si tenemos cache válido y no es refresh forzado, retornar del cache
+    if (!forceRefresh && isCacheValid() && equiposCache.data) {
+      console.log('✅ Usando equipos desde cache');
+      return equiposCache.data;
+    }
+
+    console.log('📡 Consultando equipos desde backend...');
+    const token = getRequiredAuthToken();
+
+    const response = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/equipos`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Error al cargar equipos');
+    }
+
+    // Transformar datos de Supabase a formato de la app
+    const equipos = (data.equipos || []).map((eq: any) => ({
+      id: eq.eqp_id?.toString() || '',
+      nombre: eq.eqp_nombre || '',
+      codigo: eq.eqp_codigo || '',
+      marca: eq.eqp_marca || '',
+      modelo: eq.eqp_modelo || '',
+      observaciones: eq.eqp_observaciones || '',
+      estado: eq.estado?.std_nombre || 'Operativo',
+      guardarecursoAsignado: eq.eqp_usuario?.toString() || undefined,
+      tipo: inferTipoEquipo(eq.eqp_nombre || '')
+    }));
+
+    // Guardar en cache
+    equiposCache.data = equipos;
+    equiposCache.timestamp = Date.now();
+    
+    console.log(`✅ ${equipos.length} equipos cargados y cacheados`);
+    return equipos;
+  } catch (error) {
+    console.error('❌ Error al obtener equipos:', error);
+    throw error;
+  }
+}
+
+/**
+ * 🌐 API: Crear equipo en Supabase
+ * OPTIMIZADO: Limpia cache automáticamente
+ * 
+ * @param formData - Datos del formulario
+ * @returns Promise con el equipo creado
+ * 
+ * @example
+ * const nuevoEquipo = await createEquipoAPI(formData);
+ */
+export async function createEquipoAPI(formData: EquipoFormData): Promise<any> {
+  try {
+    const token = getRequiredAuthToken();
+
+    const response = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/equipos`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(formData)
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Error al crear equipo');
+    }
+
+    // Limpiar cache
+    clearEquiposCache();
+
+    // Transformar datos de Supabase a formato de la app
+    const eq = data.equipo;
+    return {
+      id: eq.eqp_id?.toString() || '',
+      nombre: eq.eqp_nombre || '',
+      codigo: eq.eqp_codigo || '',
+      marca: eq.eqp_marca || '',
+      modelo: eq.eqp_modelo || '',
+      observaciones: eq.eqp_observaciones || '',
+      estado: eq.estado?.std_nombre || 'Operativo',
+      guardarecursoAsignado: eq.eqp_usuario?.toString() || undefined,
+      tipo: inferTipoEquipo(eq.eqp_nombre || '')
+    };
+  } catch (error) {
+    console.error('❌ Error al crear equipo:', error);
+    throw error;
+  }
+}
+
+/**
+ * 🌐 API: Actualizar equipo en Supabase
+ * OPTIMIZADO: Limpia cache automáticamente
+ * 
+ * IMPORTANTE: Solo se pueden editar observaciones y asignación de guardarecurso.
+ * Los campos nombre, código, marca y modelo NO son editables.
+ * 
+ * @param equipoId - ID del equipo
+ * @param formData - Datos del formulario
+ * @returns Promise con el equipo actualizado
+ * 
+ * @example
+ * const equipoActualizado = await updateEquipoAPI('1', formData);
+ */
+export async function updateEquipoAPI(equipoId: string, formData: EquipoFormData): Promise<any> {
+  try {
+    const token = getRequiredAuthToken();
+
+    const response = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/equipos/${equipoId}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          // SOLO enviar observaciones y guardarecursoAsignado
+          // nombre, codigo, marca y modelo NO se envían porque no son editables
+          observaciones: formData.observaciones,
+          guardarecursoAsignado: formData.guardarecursoAsignado
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Error al actualizar equipo');
+    }
+
+    // Limpiar cache
+    clearEquiposCache();
+
+    // Transformar datos de Supabase a formato de la app
+    const eq = data.equipo;
+    return {
+      id: eq.eqp_id?.toString() || '',
+      nombre: eq.eqp_nombre || '',
+      codigo: eq.eqp_codigo || '',
+      marca: eq.eqp_marca || '',
+      modelo: eq.eqp_modelo || '',
+      observaciones: eq.eqp_observaciones || '',
+      estado: eq.estado?.std_nombre || 'Operativo',
+      guardarecursoAsignado: eq.eqp_usuario?.toString() || undefined,
+      tipo: inferTipoEquipo(eq.eqp_nombre || '')
+    };
+  } catch (error) {
+    console.error('❌ Error al actualizar equipo:', error);
+    throw error;
+  }
+}
+
+/**
+ * 🌐 API: Cambiar estado de equipo en Supabase
+ * OPTIMIZADO: Limpia cache automáticamente
+ * 
+ * @param equipoId - ID del equipo
+ * @param nuevoEstado - Nuevo estado
+ * @returns Promise
+ * 
+ * @example
+ * await updateEstadoAPI('1', 'En Reparación');
+ */
+export async function updateEstadoAPI(equipoId: string, nuevoEstado: EstadoEquipo): Promise<void> {
+  try {
+    const token = getRequiredAuthToken();
+
+    const response = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/equipos/${equipoId}/estado`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ nuevoEstado })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Error al cambiar estado del equipo');
+    }
+
+    // Limpiar cache
+    clearEquiposCache();
+  } catch (error) {
+    console.error('❌ Error al cambiar estado del equipo:', error);
+    throw error;
+  }
+}
+
 /**
  * Servicio principal de Equipos
  * Agrupa todas las funcionalidades en un objeto cohesivo
@@ -441,10 +714,19 @@ export const equiposService = {
   // Configuración
   ESTADOS_CONFIG,
   
+  // API calls
+  fetchEquipos,
+  createEquipoAPI,
+  updateEquipoAPI,
+  updateEstadoAPI,
+  
+  // Cache
+  clearEquiposCache,
+  
   // Filtrado
   filterEquipos,
   
-  // Creación y actualización
+  // Creación y actualización (local)
   createEquipo,
   updateEquipo,
   updateEstado,

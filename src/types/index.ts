@@ -86,14 +86,14 @@ export interface RegistroActividad {
 }
 
 // Mapea a la tabla: actividad (act_id, act_codigo, act_tipo, act_usuario, act_descripcion, 
-// act_fechah_programcion, act_fechah_iniciio, act_latitud_inicio, act_longitud_inicio, 
+// act_fechah_programacion, act_fechah_iniciio, act_latitud_inicio, act_longitud_inicio, 
 // act_fechah_fin, act_latitud_fin, act_longitud_fin, act_estado)
 export interface Actividad {
   id: string;                    // act_id
   codigo?: string;               // act_codigo
   tipo: string;                  // act_tipo - FK a tabla tipo
   descripcion: string;           // act_descripcion
-  fecha: string;                 // act_fechah_programcion - Fecha y hora de programación
+  fecha: string;                 // act_fechah_programacion - Fecha y hora de programación
   horaInicio?: string;           // act_fechah_iniciio (opcional para frontend, en BD es timestamp)
   horaFin?: string;              // act_fechah_fin (opcional para frontend, en BD es timestamp)
   fechaHoraInicio?: string;      // act_fechah_iniciio - Timestamp completo de inicio
@@ -157,7 +157,7 @@ export interface EvidenciaFotografica {
 }
 
 // Mapea a la tabla: hallazgo (hlz_id, hlz_nombre, hlz_categoria, hlz_descripcion, 
-// hlz_latitud, hlz_longitud, hlz_fecha, hlz_usuario, hlz_estado, hlz_actividad)
+// hlz_latitud, hlz_longitud, hlz_fecha, hlz_usuario, hlz_estado)
 export interface Hallazgo {
   id: string;                    // hlz_id
   titulo: string;                // hlz_nombre (cambió de nombre a titulo en frontend)
@@ -172,7 +172,6 @@ export interface Hallazgo {
   categoria: string;             // hlz_categoria - FK a tabla categoria (cambió de gravedad a categoria)
   gravedad?: string;             // Deprecado, usar categoria. Mantener para compatibilidad temporal
   estado: string;                // hlz_estado - FK a tabla estado
-  actividad?: string;            // hlz_actividad - FK a tabla actividad (opcional)
   evidencias?: EvidenciaFotografica[]; // Relación con tabla fotografia
   seguimientos?: SeguimientoHallazgo[]; // Relación con tabla seguimiento
 }
@@ -200,11 +199,16 @@ export interface EquipoAsignado {
   codigo: string;                // eqp_codigo (puede ser opcional en BD)
   marca: string;                 // eqp_marca
   modelo: string;                // eqp_modelo
-  fechaAsignacion?: string;      // No está en BD, calculado en frontend
-  usuario?: string;              // eqp_usuario - FK a tabla usuario (guardarecurso asignado)
+  tipo?: 'GPS' | 'Radio' | 'Binoculares' | 'Cámara' | 'Vehículo' | 'Herramienta' | 'Otro'; // No está en BD, inferido en frontend
+  fechaAsignacion?: string;      // No está en BD, solo para datos mock/frontend
+  usuario?: string;              // eqp_usuario - FK a tabla usuario (guardarecurso asignado) - DEPRECADO, usar guardarecursoAsignado
+  guardarecursoAsignado?: string; // eqp_usuario - FK a tabla usuario (guardarecurso asignado)
   estado: string;                // eqp_estado - FK a tabla estado
   observaciones: string;         // eqp_observaciones
 }
+
+// Alias para compatibilidad
+export type Equipo = EquipoAsignado;
 
 // Mapea a la tabla: incidente (inc_id, inc_titulo, inc_categoria, inc_descipcion, 
 // inc_fecha, inc_usuario, inc_estado)
@@ -305,14 +309,20 @@ export interface Usuario {
   id: string;                    // usr_id - ID único del usuario
   nombre: string;                // usr_nombre
   apellido: string;              // usr_apellido
+  nombreCompleto?: string;       // Calculado: nombre + apellido
   dpi?: string;                  // usr_dpi (13 caracteres, opcional en frontend)
-  email: string;                 // usr_correo
-  telefono: string;              // usr_telefono (8 caracteres)
-  password: string;              // usr_contrasenia (debe estar hasheada en producción)
-  rol: string;                   // usr_rol - FK a tabla rol
-  estado: string;                // usr_estado - FK a tabla estado
+  email?: string;                // usr_correo (alias para compatibilidad)
+  correo?: string;               // usr_correo (nombre de BD)
+  telefono?: string;             // usr_telefono (8 caracteres, opcional)
+  password?: string;             // usr_contrasenia (SIEMPRE 'SUPABASE_AUTH' en BD)
+  rol: string;                   // Nombre del rol (ej: 'Administrador', 'Coordinador')
+  rolId?: number;                // usr_rol - FK a tabla rol (ID numérico)
+  area?: string;                 // Nombre del área (JOIN con tabla area)
+  areaId?: number;               // usr_area - FK a tabla area (opcional, para Guardarrecursos)
+  areaAsignada?: string;         // Alias para compatibilidad
+  estado: string;                // Nombre del estado (ej: 'Activo', 'Suspendido')
+  estadoId?: number;             // usr_estado - FK a tabla estado
   fechaCreacion?: string;        // No está en BD base, pero puede venir de campos de auditoría
   ultimoAcceso?: string;         // No está en BD, opcional
   permisos?: string[];           // No está en BD, calculado en frontend según rol
-  areaAsignada?: string;         // usr_area - FK a tabla area (opcional, para Guardarecursos)
 }

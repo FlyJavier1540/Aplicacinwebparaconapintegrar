@@ -16,7 +16,7 @@ import { badgeStyles } from '../styles/shared-styles';
 export interface HallazgoFormData {
   titulo: string;
   descripcion: string;
-  gravedad: 'Baja' | 'Media' | 'Alta' | 'Crítica';
+  gravedad: 'Leve' | 'Moderado' | 'Grave' | 'Crítico';
   latitud: string;
   longitud: string;
   fotografias: Array<{
@@ -95,7 +95,7 @@ export type EstadoActividad = 'Programada' | 'En Progreso' | 'Completada';
 /**
  * Tipos de gravedad de hallazgo
  */
-export type GravedadHallazgo = 'Baja' | 'Media' | 'Alta' | 'Crítica';
+export type GravedadHallazgo = 'Leve' | 'Moderado' | 'Grave' | 'Crítico';
 
 /**
  * Tipos de evidencia fotográfica
@@ -142,8 +142,10 @@ export function filterActividadesPorRol(
 ): Actividad[] {
   let filtered = actividades;
 
-  // Filtrar por fecha (solo para admin/coordinador)
-  if (!isGuardarecurso && selectedDate) {
+  // Filtrar por fecha
+  // - Guardarecursos: SOLO actividades de hoy (ignorar selección de fecha)
+  // - Admin/Coordinador: Permitir filtrar por cualquier fecha
+  if (selectedDate) {
     filtered = filtered.filter(a => a.fecha === selectedDate);
   }
   
@@ -294,7 +296,7 @@ export function createEmptyHallazgoForm(): HallazgoFormData {
   return {
     titulo: '',
     descripcion: '',
-    gravedad: 'Media',
+    gravedad: 'Moderado',
     latitud: '',
     longitud: '',
     fotografias: []
@@ -715,7 +717,7 @@ export function getAllTiposEvidencia(): TipoEvidencia[] {
  * @returns Array de gravedades
  */
 export function getAllGravedades(): GravedadHallazgo[] {
-  return ['Baja', 'Media', 'Alta', 'Crítica'];
+  return ['Leve', 'Moderado', 'Grave', 'Crítico'];
 }
 
 // ============================================================================

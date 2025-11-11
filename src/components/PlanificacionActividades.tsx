@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback, memo } from 'react';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -10,14 +10,18 @@ import { Textarea } from './ui/textarea';
 import { Calendar } from './ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Plus, Edit, Search, Calendar as CalendarIcon, Clock, MapPin, Users, Shield, CheckCircle, AlertCircle, XCircle, Play, MoreVertical, Binoculars, Wrench, GraduationCap, Eye, Map, ChevronDown, Activity, User, FileText, Flame, TreePine, Sprout, Upload, Download } from 'lucide-react';
-import { actividades, guardarecursos, areasProtegidas } from '../data/mock-data';
-import { Actividad } from '../types';
+import { Actividad, Guardarecurso } from '../types';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { motion } from 'motion/react';
 import { actividadesSync } from '../utils/actividadesSync';
 import { buttonStyles, filterStyles, badgeStyles, formStyles, listCardStyles, layoutStyles, cardStyles, getActividadTopLineColor } from '../styles/shared-styles';
 import { actividadesService, ActividadFormData, TipoActividad, EstadoActividad } from '../utils/actividadesService';
+import { fetchActividades, createActividadAPI, updateActividadAPI, deleteActividadAPI } from '../utils/actividadesAPI';
+import { authService } from '../utils/authService';
+import { guardarecursosService } from '../utils/guardarecursosService';
+import { toast } from 'sonner@2.0.3';
+import { forceLogout } from '../utils/base-api-service';
 
 interface PlanificacionActividadesProps {
   userPermissions: {
@@ -28,22 +32,131 @@ interface PlanificacionActividadesProps {
   };
 }
 
+// ===== COMPONENTES MEMOIZADOS =====
+
+/**
+ * Card de actividad - Memoizado
+ */
+interface ActividadCardProps {
+  actividad: any;
+  index: number;
+  guardarecurso?: Guardarecurso;
+  canEdit: boolean;
+  onEdit: (actividad: Actividad) => void;
+  getTipoColor: (tipo: string) => any;
+  getEstadoInfo: (estado: EstadoActividad) => any;
+  getTipoIcon: (tipo: string) => any;
+}
+
+const ActividadCard = memo(({
+  actividad,
+  index,
+  guardarecurso,
+  canEdit,
+  onEdit,
+  getTipoColor,
+  getEstadoInfo,
+  getTipoIcon
+}: ActividadCardProps) => {
+  const handleEdit = useCallback(() => onEdit(actividad), [onEdit, actividad]);
+  const estadoInfo = getEstadoInfo(actividad.estado);
+  const EstadoIcon = estadoInfo.icon;
+  const TipoIcon = getTipoIcon(actividad.tipo);
+  
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay: index * 0.05 }}
+    >
+      <Card className={`${cardStyles.baseWithOverflow} ${listCardStyles.card}`}>
+        <div className={getActividadTopLineColor(actividad.estado)} />
+        <CardContent className={listCardStyles.content}>
+          {/* Header con título y acciones */}
+          <div className={listCardStyles.header}>
+            <div className={listCardStyles.headerContent}>
+              <h3 className={`${listCardStyles.title} line-clamp-2`}>
+                {actividad.descripcion}
+              </h3>
+              <div className={listCardStyles.badgeContainer}>
+                <Badge className={`${estadoInfo.badge} border ${listCardStyles.badge}`}>
+                  {actividad.estado}
+                </Badge>
+              </div>
+            </div>
+            {canEdit && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleEdit}
+                className={listCardStyles.actionButtonEdit}
+              >
+                <Edit className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+
+          {/* Información de la actividad */}
+          <div className={listCardStyles.infoSection}>
+            {/* Fecha */}
+            <div className={listCardStyles.infoItem}>
+              <CalendarIcon className={listCardStyles.infoIcon} />
+              <span className={listCardStyles.infoText}>
+                {actividad.fecha ? (() => {
+                  // Parsear la fecha como fecha local para evitar problemas de zona horaria
+                  const [year, month, day] = actividad.fecha.split('-').map(Number);
+                  const fechaLocal = new Date(year, month - 1, day);
+                  return fechaLocal.toLocaleDateString('es-GT', { 
+                    weekday: 'long',
+                    day: 'numeric', 
+                    month: 'long',
+                    year: 'numeric'
+                  });
+                })() : 'Fecha no especificada'}
+              </span>
+            </div>
+
+            {/* Hora de Programación */}
+            <div className={listCardStyles.infoItem}>
+              <Clock className={listCardStyles.infoIcon} />
+              <span className={listCardStyles.infoText}>
+                {actividad.horaInicio}
+              </span>
+            </div>
+
+            {/* Tipo de Actividad */}
+            <div className={listCardStyles.infoItem}>
+              <FileText className={listCardStyles.infoIcon} />
+              <span className={listCardStyles.infoText}>
+                {actividad.tipo}
+              </span>
+            </div>
+
+            {/* Guardarecurso */}
+            {guardarecurso && (
+              <div className={listCardStyles.infoItem}>
+                <User className={listCardStyles.infoIcon} />
+                <span className={listCardStyles.infoText}>
+                  {guardarecurso.nombre} {guardarecurso.apellido}
+                </span>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+});
+
+ActividadCard.displayName = 'ActividadCard';
+
+// ===== COMPONENTE PRINCIPAL =====
+
 export function PlanificacionActividades({ userPermissions }: PlanificacionActividadesProps) {
   const [actividadesList, setActividadesList] = useState<any[]>([]);
-
-  // Inicializar y sincronizar actividades
-  useEffect(() => {
-    // Inicializar el sync con todas las actividades desde mock-data
-    actividadesSync.updateActividades(actividades);
-    
-    // Suscribirse a cambios
-    const unsubscribe = actividadesSync.subscribe((actividades) => {
-      setActividadesList(actividades);
-    });
-
-    return unsubscribe;
-  }, []); // Solo ejecutar una vez al montar
-  
+  const [guardarecursosList, setGuardarecursosList] = useState<Guardarecurso[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingGuardarecursos, setIsLoadingGuardarecursos] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTipo, setSelectedTipo] = useState<string>('todos');
   const [selectedGuardarecurso, setSelectedGuardarecurso] = useState<string>('todos');
@@ -54,49 +167,174 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
   const [bulkGuardarecurso, setBulkGuardarecurso] = useState<string>('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   
-
-  
-  // Usar servicio para crear form data vacío
   const [formData, setFormData] = useState<ActividadFormData>(actividadesService.createEmptyFormData());
 
-  // Filtrado usando el servicio
+  /**
+   * Cargar actividades - Memoizado
+   * 🔒 SEGURIDAD: Si hay error, fuerza logout
+   */
+  const loadActividades = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const accessToken = authService.getCurrentToken();
+      if (!accessToken) {
+        console.error('❌ NO HAY TOKEN - FORZANDO LOGOUT');
+        forceLogout();
+        return;
+      }
+
+      const actividadesFromServer = await fetchActividades(accessToken);
+      setActividadesList(actividadesFromServer);
+    } catch (error) {
+      console.error('❌ ERROR AL CARGAR ACTIVIDADES - FORZANDO LOGOUT:', error);
+      forceLogout();
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  /**
+   * Cargar guardarecursos - Memoizado
+   * 🔒 SEGURIDAD: Si hay error, fuerza logout
+   */
+  const loadGuardarecursos = useCallback(async () => {
+    setIsLoadingGuardarecursos(true);
+    try {
+      const accessToken = authService.getCurrentToken();
+      if (!accessToken) {
+        console.error('❌ NO HAY TOKEN - FORZANDO LOGOUT');
+        forceLogout();
+        return;
+      }
+
+      const guardarecursosFromServer = await guardarecursosService.fetchGuardarecursos(accessToken);
+      console.log('✅ Guardarecursos cargados:', guardarecursosFromServer);
+      setGuardarecursosList(guardarecursosFromServer);
+    } catch (error) {
+      console.error('❌ ERROR AL CARGAR GUARDARECURSOS - FORZANDO LOGOUT:', error);
+      forceLogout();
+    } finally {
+      setIsLoadingGuardarecursos(false);
+    }
+  }, []);
+
+  // Cargar actividades y guardarecursos al montar
+  useEffect(() => {
+    loadActividades();
+    loadGuardarecursos();
+  }, [loadActividades, loadGuardarecursos]);
+
+  /**
+   * Tipos de actividad - Memoizados
+   */
+  const tiposActividad = useMemo(() => actividadesService.getAllTipos(), []);
+
+  /**
+   * Fecha mínima para el calendario (futuro) - Memoizado
+   */
+  const minDateTime = useMemo(() => {
+    const now = new Date();
+    // Agregar 1 minuto para que solo permita fechas futuras
+    now.setMinutes(now.getMinutes() + 1);
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  }, []);
+
+  /**
+   * Guardarecursos ACTIVOS ordenados alfabéticamente - Memoizado
+   */
+  const guardarecursosOrdenados = useMemo(() => {
+    return guardarecursosList
+      .filter(g => g.estado === 'Activo') // Solo guardarecursos activos
+      .sort((a, b) => {
+        const nombreA = `${a.nombre} ${a.apellido}`;
+        const nombreB = `${b.nombre} ${b.apellido}`;
+        return nombreA.localeCompare(nombreB, 'es');
+      });
+  }, [guardarecursosList]);
+
+  /**
+   * Filtrado y ordenado usando el servicio - Memoizado
+   */
   const filteredActividades = useMemo(() => {
-    return actividadesService.filterActividadesProgramadas(
+    const filtered = actividadesService.filterActividadesProgramadas(
       actividadesList,
       searchTerm,
       selectedTipo,
       selectedGuardarecurso
     );
+    
+    // Ordenar de más antigua a más reciente según fecha de programación
+    return filtered.sort((a, b) => {
+      const dateA = new Date(`${a.fecha}T${a.horaInicio || '00:00'}`);
+      const dateB = new Date(`${b.fecha}T${b.horaInicio || '00:00'}`);
+      return dateA.getTime() - dateB.getTime();
+    });
   }, [actividadesList, searchTerm, selectedTipo, selectedGuardarecurso]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  /**
+   * Mapa de guardarecursos por ID - Memoizado
+   */
+  const guardarecursosMap = useMemo(() => {
+    const map: Record<string, Guardarecurso> = {};
+    guardarecursosList.forEach(g => {
+      map[g.id] = g;
+    });
+    return map;
+  }, [guardarecursosList]);
+
+  /**
+   * Handler para submit - Memoizado
+   */
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (editingActividad) {
-      // Actualizar usando el servicio
-      const actividadActualizada = actividadesService.updateActividad(editingActividad, formData);
-      actividadesSync.updateActividad(editingActividad.id, actividadActualizada);
-    } else {
-      // Crear usando el servicio
-      const nuevaActividad = actividadesService.createActividad(formData);
-      actividadesSync.addActividad(nuevaActividad);
-    }
-    
-    resetForm();
-    setIsDialogOpen(false);
-  };
+    try {
+      const accessToken = authService.getCurrentToken();
+      if (!accessToken) {
+        toast.error('No hay sesión activa');
+        return;
+      }
 
-  const resetForm = () => {
+      if (editingActividad) {
+        const actividadActualizada = await updateActividadAPI(editingActividad.id, formData, accessToken);
+        setActividadesList(prev => 
+          prev.map(act => act.id === editingActividad.id ? actividadActualizada : act)
+        );
+        toast.success('Actividad actualizada exitosamente');
+      } else {
+        const nuevaActividad = await createActividadAPI(formData, accessToken);
+        setActividadesList(prev => [nuevaActividad, ...prev]);
+        toast.success('Actividad creada exitosamente');
+      }
+      
+      resetForm();
+      setIsDialogOpen(false);
+    } catch (error) {
+      console.error('Error al guardar actividad:', error);
+      toast.error('Error al guardar la actividad. Por favor intente nuevamente.');
+    }
+  }, [editingActividad, formData]);
+
+  /**
+   * Resetear formulario - Memoizado
+   */
+  const resetForm = useCallback(() => {
     setFormData(actividadesService.createEmptyFormData());
     setSelectedDate(undefined);
     setEditingActividad(null);
-  };
+  }, []);
 
-  // Función para descargar plantilla Excel (usando servicio)
-  const handleDownloadTemplate = () => {
+  /**
+   * Descargar plantilla - Memoizado
+   */
+  const handleDownloadTemplate = useCallback(() => {
     const csvContent = actividadesService.generateTemplateCSV();
     
-    // Crear y descargar el archivo
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
@@ -106,57 +344,110 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  };
+  }, []);
 
-  // Función para manejar la carga del archivo
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /**
+   * Handler para carga de archivo - Memoizado
+   */
+  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setSelectedFile(file);
     }
-  };
+  }, []);
 
-  // Función para procesar el archivo CSV (usando servicio)
-  const handleProcessBulkUpload = () => {
+  /**
+   * Procesar carga masiva - Memoizado
+   */
+  const handleProcessBulkUpload = useCallback(async () => {
     if (!selectedFile || !bulkGuardarecurso) {
-      alert('Por favor seleccione un guardarecurso y un archivo');
+      toast.error('Por favor seleccione un guardarecurso y un archivo');
       return;
     }
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const text = event.target?.result as string;
       
-      // Procesar CSV usando el servicio
-      const result = actividadesService.processBulkUploadCSV(text, bulkGuardarecurso);
-      
-      // Agregar las actividades creadas al sync
-      result.actividades.forEach(actividad => {
-        actividadesSync.addActividad(actividad);
-      });
-      
-      // Mostrar errores en consola
-      if (result.errores.length > 0) {
-        console.group('❌ Errores en la carga masiva:');
-        result.errores.forEach(error => console.error(error));
-        console.groupEnd();
+      try {
+        const parseResult = actividadesService.processBulkUploadCSV(text, bulkGuardarecurso);
+        
+        if (parseResult.actividades.length === 0) {
+          toast.error('No se encontraron actividades válidas para cargar');
+          return;
+        }
+
+        const actividadesParaAPI = parseResult.actividades.map(act => ({
+          codigo: act.codigo,
+          tipo: act.tipo,
+          descripcion: act.descripcion,
+          fecha: act.fecha,
+          horaInicio: act.horaInicio,
+          horaFin: act.horaFin || '',
+          coordenadas: act.coordenadas || { lat: 0, lng: 0 },
+          guardarecurso: act.guardarecurso
+        }));
+
+        const accessToken = authService.getCurrentToken();
+        if (!accessToken) {
+          toast.error('No hay sesión activa');
+          return;
+        }
+
+        const { createActividadesBulkAPI } = await import('../utils/actividadesAPI');
+        const resultado = await createActividadesBulkAPI(actividadesParaAPI, accessToken);
+
+        setActividadesList(prev => [...resultado.actividades, ...prev]);
+
+        if (resultado.errores.length > 0) {
+          console.group('❌ Errores en la carga masiva:');
+          resultado.errores.forEach(error => console.error(`${error.codigo}: ${error.error}`));
+          console.groupEnd();
+        }
+
+        const erroresCompletos = [
+          ...parseResult.errores,
+          ...resultado.errores.map(e => `${e.codigo}: ${e.error}`)
+        ];
+
+        let mensaje = '';
+        if (resultado.actividadesCargadas > 0) {
+          mensaje += `✓ ${resultado.actividadesCargadas} actividades cargadas exitosamente`;
+        }
+        
+        if (resultado.actividadesConError > 0 || parseResult.actividadesConError > 0) {
+          const totalErrores = resultado.actividadesConError + parseResult.actividadesConError;
+          if (mensaje) mensaje += '\n\n';
+          mensaje += `⚠ ${totalErrores} actividades con errores:\n\n`;
+          mensaje += erroresCompletos.slice(0, 5).join('\n');
+          if (erroresCompletos.length > 5) {
+            mensaje += `\n... y ${erroresCompletos.length - 5} errores más (ver consola)`;
+          }
+        }
+
+        if (!mensaje) {
+          mensaje = '⚠ No se procesaron actividades. Verifique el archivo.';
+        }
+
+        toast.info(mensaje);
+        
+        setIsBulkUploadOpen(false);
+        setBulkGuardarecurso('');
+        setSelectedFile(null);
+      } catch (error) {
+        console.error('Error al procesar carga masiva:', error);
+        toast.error('Error al procesar la carga masiva. Por favor intente nuevamente.');
       }
-      
-      // Mostrar resumen usando el servicio
-      const mensaje = actividadesService.generateBulkUploadSummary(result);
-      alert(mensaje);
-      
-      setIsBulkUploadOpen(false);
-      setBulkGuardarecurso('');
-      setSelectedFile(null);
     };
     
     reader.readAsText(selectedFile);
-  };
+  }, [selectedFile, bulkGuardarecurso]);
 
-  const handleEdit = (actividad: Actividad) => {
+  /**
+   * Handler para editar - Memoizado
+   */
+  const handleEdit = useCallback((actividad: Actividad) => {
     setFormData(actividadesService.actividadToFormData(actividad));
-    // Validar que la fecha sea válida antes de crear el objeto Date
     if (actividad.fecha && actividad.horaInicio) {
       const fechaHora = `${actividad.fecha}T${actividad.horaInicio}`;
       const fechaObj = new Date(fechaHora);
@@ -170,16 +461,16 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
     }
     setEditingActividad(actividad);
     setIsDialogOpen(true);
-  };
+  }, []);
 
-
-
-  // Usar funciones del servicio para estilos
-  const getTipoColor = (tipo: string) => {
+  /**
+   * Funciones del servicio para estilos - Memoizadas
+   */
+  const getTipoColor = useCallback((tipo: string) => {
     return actividadesService.getTipoColor(tipo);
-  };
+  }, []);
 
-  const getEstadoInfo = (estado: EstadoActividad) => {
+  const getEstadoInfo = useCallback((estado: EstadoActividad) => {
     const info = actividadesService.getEstadoInfo(estado);
     const iconMap: Record<string, any> = {
       'Clock': Clock,
@@ -191,9 +482,9 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
       ...info,
       icon: iconMap[info.icon] || AlertCircle
     };
-  };
+  }, []);
 
-  const getTipoIcon = (tipo: string) => {
+  const getTipoIcon = useCallback((tipo: string) => {
     const iconName = actividadesService.getTipoIcon(tipo);
     const iconMap: Record<string, any> = {
       'Binoculars': Binoculars,
@@ -204,24 +495,50 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
       'CalendarIcon': CalendarIcon
     };
     return iconMap[iconName] || CalendarIcon;
-  };
+  }, []);
 
-  const getEstadoBadgeClass = (estado: EstadoActividad) => {
-    return actividadesService.getEstadoBadgeClass(estado);
-  };
+  /**
+   * Handler para abrir diálogo nuevo - Memoizado
+   */
+  const handleOpenNewDialog = useCallback(() => {
+    resetForm();
+    setIsDialogOpen(true);
+  }, [resetForm]);
 
-  const getEstadoIcon = (estado: EstadoActividad) => {
-    const iconName = actividadesService.getEstadoIcon(estado);
-    const iconMap: Record<string, any> = {
-      'Clock': Clock,
-      'Play': Play,
-      'CheckCircle': CheckCircle,
-      'XCircle': XCircle
-    };
-    return iconMap[iconName] || XCircle;
-  };
+  /**
+   * Handler para cancelar diálogo - Memoizado
+   */
+  const handleCancelDialog = useCallback(() => {
+    resetForm();
+    setIsDialogOpen(false);
+  }, [resetForm]);
 
-  const tiposActividad = actividadesService.getAllTipos();
+  /**
+   * Handler para abrir carga masiva - Memoizado
+   */
+  const handleOpenBulkUpload = useCallback(() => {
+    setBulkGuardarecurso('');
+    setSelectedFile(null);
+    setIsBulkUploadOpen(true);
+  }, []);
+
+  /**
+   * Handler para cancelar carga masiva - Memoizado
+   */
+  const handleCancelBulkUpload = useCallback(() => {
+    setIsBulkUploadOpen(false);
+    setBulkGuardarecurso('');
+    setSelectedFile(null);
+  }, []);
+
+  /**
+   * Handler para limpiar filtros - Memoizado
+   */
+  const handleClearFilters = useCallback(() => {
+    setSearchTerm('');
+    setSelectedTipo('todos');
+    setSelectedGuardarecurso('todos');
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -263,7 +580,7 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="todos">Todos los guardarecursos</SelectItem>
-              {guardarecursos.map(gr => (
+              {guardarecursosList.map(gr => (
                 <SelectItem key={gr.id} value={gr.id}>
                   {gr.nombre} {gr.apellido}
                 </SelectItem>
@@ -277,11 +594,7 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
           <>
             <Button 
               variant="outline"
-              onClick={() => {
-                setBulkGuardarecurso('');
-                setSelectedFile(null);
-                setIsBulkUploadOpen(true);
-              }}
+              onClick={handleOpenBulkUpload}
               className={buttonStyles.bulkUploadButton}
             >
               <Upload className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-2" />
@@ -289,10 +602,7 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
             </Button>
             
             <Button 
-              onClick={() => {
-                resetForm();
-                setIsDialogOpen(true);
-              }}
+              onClick={handleOpenNewDialog}
               className={buttonStyles.createButton}
             >
               <Plus className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-2" />
@@ -355,14 +665,11 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
                         <SelectValue placeholder="Seleccione guardarecurso" />
                       </SelectTrigger>
                       <SelectContent>
-                        {guardarecursos.map(g => {
-                          const area = areasProtegidas.find(a => a.id === g.areaAsignada);
-                          return (
-                            <SelectItem key={g.id} value={g.id}>
-                              {g.nombre} {g.apellido} - {area?.nombre || 'Sin área asignada'}
-                            </SelectItem>
-                          );
-                        })}
+                        {guardarecursosOrdenados.map(g => (
+                          <SelectItem key={g.id} value={g.id}>
+                            {g.nombre} {g.apellido}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -392,6 +699,7 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
                     <Input
                       id="fechaHoraProgramacion"
                       type="datetime-local"
+                      min={minDateTime}
                       value={formData.fecha && formData.horaInicio 
                         ? `${formData.fecha}T${formData.horaInicio}` 
                         : ''}
@@ -404,13 +712,15 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
                             fecha: fecha,
                             horaInicio: hora
                           });
-                          // Actualizar selectedDate para consistencia
                           setSelectedDate(new Date(datetime));
                         }
                       }}
                       className={formStyles.input}
                       required
                     />
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Solo se pueden programar actividades futuras
+                    </p>
                   </div>
                 </div>
               </div>
@@ -420,10 +730,7 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
                 <Button 
                   type="button" 
                   variant="outline" 
-                  onClick={() => {
-                    resetForm();
-                    setIsDialogOpen(false);
-                  }}
+                  onClick={handleCancelDialog}
                   className={formStyles.cancelButton}
                 >
                   Cancelar
@@ -514,7 +821,7 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
                     <SelectValue placeholder="Seleccione un guardarecurso" />
                   </SelectTrigger>
                   <SelectContent>
-                    {guardarecursos.map(gr => (
+                    {guardarecursosOrdenados.map(gr => (
                       <SelectItem key={gr.id} value={gr.id}>
                         {gr.nombre} {gr.apellido}
                       </SelectItem>
@@ -555,11 +862,7 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
               <Button 
                 type="button"
                 variant="outline" 
-                onClick={() => {
-                  setIsBulkUploadOpen(false);
-                  setBulkGuardarecurso('');
-                  setSelectedFile(null);
-                }}
+                onClick={handleCancelBulkUpload}
                 className={formStyles.cancelButton}
               >
                 Cancelar
@@ -580,7 +883,19 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
       {/* Grid de actividades */}
       <div>
         <div>
-          {filteredActividades.length === 0 ? (
+          {isLoading ? (
+            <Card className="border-0 shadow-lg">
+              <CardContent className="p-8 sm:p-12">
+                <div className="text-center">
+                  <Clock className="h-12 w-12 sm:h-16 sm:w-16 mx-auto mb-3 sm:mb-4 text-muted-foreground opacity-30 animate-spin" />
+                  <h3 className="mb-2 text-sm sm:text-base">Cargando actividades...</h3>
+                  <p className="text-xs sm:text-sm text-muted-foreground">
+                    Por favor espere mientras se cargan las actividades
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : filteredActividades.length === 0 ? (
             <Card className="border-0 shadow-lg">
               <CardContent className="p-8 sm:p-12">
                 <div className="text-center">
@@ -591,11 +906,7 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
                   </p>
                   <Button 
                     variant="outline" 
-                    onClick={() => {
-                      setSearchTerm('');
-                      setSelectedTipo('todos');
-                      setSelectedGuardarecurso('todos');
-                    }}
+                    onClick={handleClearFilters}
                     className="text-xs sm:text-sm"
                   >
                     Limpiar filtros
@@ -605,96 +916,19 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
             </Card>
           ) : (
             <div className={layoutStyles.cardGrid}>
-              {filteredActividades.map((actividad, index) => {
-                const guardarecurso = guardarecursos.find(g => g.id === actividad.guardarecurso);
-                const tipoColor = getTipoColor(actividad.tipo);
-                const estadoInfo = getEstadoInfo(actividad.estado);
-                const EstadoIcon = estadoInfo.icon;
-                const TipoIcon = getTipoIcon(actividad.tipo);
-                
-                return (
-                  <motion.div
-                    key={actividad.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3, delay: index * 0.05 }}
-                  >
-                    <Card className={`${cardStyles.baseWithOverflow} ${listCardStyles.card}`}>
-                      <div className={getActividadTopLineColor(actividad.estado)} />
-                      <CardContent className={listCardStyles.content}>
-                        {/* Header con título y acciones */}
-                        <div className={listCardStyles.header}>
-                          <div className={listCardStyles.headerContent}>
-                            <h3 className={`${listCardStyles.title} line-clamp-2`}>
-                              {actividad.descripcion}
-                            </h3>
-                            <div className={listCardStyles.badgeContainer}>
-                              <Badge className={`${estadoInfo.badge} border ${listCardStyles.badge}`}>
-                                {actividad.estado}
-                              </Badge>
-                            </div>
-                          </div>
-                          {userPermissions.canEdit && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleEdit(actividad)}
-                              className={listCardStyles.actionButtonEdit}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </div>
-
-                        {/* Información de la actividad */}
-                        <div className={listCardStyles.infoSection}>
-                          {/* Fecha */}
-                          <div className={listCardStyles.infoItem}>
-                            <CalendarIcon className={listCardStyles.infoIcon} />
-                            <span className={listCardStyles.infoText}>
-                              {actividad.fecha && !isNaN(new Date(actividad.fecha).getTime()) 
-                                ? new Date(actividad.fecha).toLocaleDateString('es-GT', { 
-                                    weekday: 'long',
-                                    day: 'numeric', 
-                                    month: 'long',
-                                    year: 'numeric'
-                                  })
-                                : 'Fecha no especificada'
-                              }
-                            </span>
-                          </div>
-
-                          {/* Hora de Programación */}
-                          <div className={listCardStyles.infoItem}>
-                            <Clock className={listCardStyles.infoIcon} />
-                            <span className={listCardStyles.infoText}>
-                              {actividad.horaInicio}
-                            </span>
-                          </div>
-
-                          {/* Tipo de Actividad */}
-                          <div className={listCardStyles.infoItem}>
-                            <FileText className={listCardStyles.infoIcon} />
-                            <span className={listCardStyles.infoText}>
-                              {actividad.tipo}
-                            </span>
-                          </div>
-
-                          {/* Guardarecurso */}
-                          {guardarecurso && (
-                            <div className={listCardStyles.infoItem}>
-                              <User className={listCardStyles.infoIcon} />
-                              <span className={listCardStyles.infoText}>
-                                {guardarecurso.nombre} {guardarecurso.apellido}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </motion.div>
-                );
-              })}
+              {filteredActividades.map((actividad, index) => (
+                <ActividadCard
+                  key={actividad.id}
+                  actividad={actividad}
+                  index={index}
+                  guardarecurso={guardarecursosMap[actividad.guardarecurso]}
+                  canEdit={userPermissions.canEdit}
+                  onEdit={handleEdit}
+                  getTipoColor={getTipoColor}
+                  getEstadoInfo={getEstadoInfo}
+                  getTipoIcon={getTipoIcon}
+                />
+              ))}
             </div>
           )}
         </div>

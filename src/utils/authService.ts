@@ -1,13 +1,24 @@
 /**
- * 🔐 Authentication Service
+ * 🔐 Authentication Service with Supabase
  * 
- * Servicio centralizado que maneja toda la lógica de autenticación y gestión de contraseñas,
- * incluyendo validación de credenciales, cambio de contraseñas y verificación de estados.
+ * Servicio centralizado que maneja toda la lógica de autenticación usando Supabase Auth,
+ * incluyendo validación de credenciales, cambio de contraseñas, persistencia de sesión
+ * y gestión de estado.
  * 
  * @module utils/authService
  */
 
-import { usuarios } from '../data/mock-data';
+import { supabase, getActiveSession, signOut as supabaseSignOut } from './supabase/client';
+import { projectId, publicAnonKey } from './supabase/info';
+
+/**
+ * Interface para sesión guardada en localStorage
+ */
+export interface AuthSession {
+  token: string;
+  user: any;
+  expiresAt: number;
+}
 
 /**
  * Interface para resultado de autenticación
@@ -15,7 +26,7 @@ import { usuarios } from '../data/mock-data';
 export interface AuthResult {
   success: boolean;
   user?: any;
-  token?: string;  // Token JWT agregado
+  token?: string;
   error?: string;
 }
 
@@ -36,95 +47,421 @@ export interface PasswordChangeResult {
 }
 
 /**
- * 🔑 AUTENTICACIÓN
+ * 🗝️ PERSISTENCIA DE SESIÓN
  */
 
+const SESSION_KEY = 'conap_session';
+const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 horas
+
 /**
- * Genera un token JWT simulado para desarrollo
- * NOTA: En producción, esto debe venir del backend
+ * Guarda la sesión en localStorage
  */
-function generateMockToken(usuario: any): string {
-  // Token simulado en formato JWT (base64)
-  // En producción, el backend generará el token real
-  const payload = {
-    id: usuario.id,
-    email: usuario.email,
-    rol: usuario.rol,
-    iat: Date.now(),
-    exp: Date.now() + (24 * 60 * 60 * 1000) // 24 horas
+export function saveSession(token: string, user: any): void {
+  const session: AuthSession = {
+    token,
+    user,
+    expiresAt: Date.now() + SESSION_DURATION
   };
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   
-  return `mock.${btoa(JSON.stringify(payload))}.signature`;
+  // También guardar el token por separado para base-api-service
+  localStorage.setItem('conap_auth_token', token);
 }
 
 /**
- * Decodifica un token JWT simulado
- * NOTA: En producción, usa una librería JWT real
+ * Carga la sesión desde localStorage
+ * 
+ * 🔒 SEGURIDAD:
+ * - Valida que la sesión no haya expirado (24 horas)
+ * - Limpia automáticamente sesiones expiradas
+ * - Maneja errores de parsing
  */
-export function decodeMockToken(token: string): any | null {
+export function loadSession(): AuthSession | null {
   try {
-    const parts = token.split('.');
-    if (parts.length !== 3 || parts[0] !== 'mock') {
+    const sessionStr = localStorage.getItem(SESSION_KEY);
+    if (!sessionStr) return null;
+
+    const session: AuthSession = JSON.parse(sessionStr);
+
+    // Verificar si la sesión ha expirado
+    if (Date.now() > session.expiresAt) {
+      console.log('⏰ Sesión local expirada (24h). Limpiando TODO...');
+      // Limpiar TODOS los datos cuando la sesión expira
+      clearAllData();
       return null;
     }
-    
-    const payload = JSON.parse(atob(parts[1]));
-    
-    // Verificar si el token ha expirado
-    if (payload.exp && payload.exp < Date.now()) {
-      return null; // Token expirado
-    }
-    
-    return payload;
+
+    return session;
   } catch (error) {
+    console.error('Error al cargar sesión:', error);
+    // Limpiar TODOS los datos si hay error de parsing
+    clearAllData();
     return null;
   }
 }
 
 /**
- * Autentica a un usuario con email y contraseña
+ * Limpia la sesión de localStorage
  */
-export function authenticate(email: string, password: string): AuthResult {
-  const usuario = usuarios.find(u => u.email === email && u.password === password);
+export function clearSession(): void {
+  localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem('conap_auth_token');
+}
+
+/**
+ * 🧹 LIMPIEZA COMPLETA DE DATOS Y CACHÉ
+ * 
+ * Limpia TODOS los datos almacenados en el navegador:
+ * - localStorage completo
+ * - sessionStorage completo
+ * - Cookies del dominio actual
+ * - Caché del navegador (si está soportado)
+ * 
+ * Esta función se usa cuando el token ha expirado para asegurar
+ * que NO queden datos en memoria o caché.
+ */
+export async function clearAllData(): Promise<void> {
+  console.log('🧹 Iniciando limpieza completa de datos y caché...');
   
-  if (!usuario) {
+  try {
+    // 1. Limpiar localStorage completo
+    console.log('🗑️ Limpiando localStorage...');
+    localStorage.clear();
+    
+    // 2. Limpiar sessionStorage completo
+    console.log('🗑️ Limpiando sessionStorage...');
+    sessionStorage.clear();
+    
+    // 3. Limpiar todas las cookies del dominio actual
+    console.log('🍪 Limpiando cookies...');
+    const cookies = document.cookie.split(';');
+    for (let i = 0; i < cookies.length; i++) {
+      const cookie = cookies[i];
+      const eqPos = cookie.indexOf('=');
+      const name = eqPos > -1 ? cookie.substr(0, eqPos).trim() : cookie.trim();
+      
+      // Eliminar en todos los paths y dominios posibles
+      document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+      document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=' + window.location.hostname;
+      document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.' + window.location.hostname;
+    }
+    
+    // 4. Limpiar caché del navegador usando Cache API (si está soportado)
+    if ('caches' in window) {
+      console.log('💾 Limpiando caché del navegador...');
+      try {
+        const cacheNames = await caches.keys();
+        await Promise.all(
+          cacheNames.map(cacheName => caches.delete(cacheName))
+        );
+        console.log('✅ Caché del navegador limpiado');
+      } catch (cacheError) {
+        console.warn('⚠️ No se pudo limpiar el caché del navegador:', cacheError);
+      }
+    }
+    
+    // 5. Limpiar IndexedDB de Supabase (si existe)
+    if ('indexedDB' in window) {
+      console.log('🗄️ Limpiando IndexedDB...');
+      try {
+        // Supabase usa IndexedDB para almacenar sesiones
+        const databases = await indexedDB.databases?.() || [];
+        for (const db of databases) {
+          if (db.name) {
+            indexedDB.deleteDatabase(db.name);
+          }
+        }
+        console.log('✅ IndexedDB limpiado');
+      } catch (idbError) {
+        console.warn('⚠️ No se pudo limpiar IndexedDB:', idbError);
+      }
+    }
+    
+    console.log('✅ Limpieza completa finalizada');
+  } catch (error) {
+    console.error('❌ Error durante la limpieza completa:', error);
+    // Asegurar que al menos localStorage esté limpio
+    localStorage.clear();
+    sessionStorage.clear();
+  }
+}
+
+/**
+ * Verifica si hay una sesión válida
+ */
+export function isSessionValid(): boolean {
+  const session = loadSession();
+  return session !== null;
+}
+
+/**
+ * 🔑 AUTENTICACIÓN CON SUPABASE
+ */
+
+/**
+ * Autentica a un usuario con email y contraseña usando Supabase Auth
+ * 
+ * FLUJO DE AUTENTICACIÓN:
+ * 1. Validar y sanitizar inputs (prevención SQL injection)
+ * 2. Autenticar con Supabase Auth (valida credenciales)
+ * 3. Obtener datos del usuario desde el backend (consulta a PostgreSQL)
+ * 4. Verificar estado del usuario
+ * 5. Retornar token y datos del usuario
+ * 
+ * SEGURIDAD:
+ * - Validación de formato de email
+ * - Sanitización de inputs
+ * - Validación de longitud
+ * - Uso de prepared statements en Supabase (protección SQL injection)
+ * 
+ * @param email - Email del usuario
+ * @param password - Contraseña del usuario
+ * @returns Resultado de autenticación con token y datos del usuario
+ * 
+ * @example
+ * ```typescript
+ * const result = await authService.authenticate('admin@conap.gob.gt', 'password123');
+ * if (result.success) {
+ *   console.log('Usuario autenticado:', result.user);
+ *   console.log('Token:', result.token);
+ * } else {
+ *   console.error('Error:', result.error);
+ * }
+ * ```
+ */
+export async function authenticate(email: string, password: string): Promise<AuthResult> {
+  try {
+    // 🔒 VALIDACIÓN 1: Verificar que los campos no estén vacíos
+    if (!email || !password) {
+      return {
+        success: false,
+        error: 'Email y contraseña son requeridos'
+      };
+    }
+
+    // 🔒 VALIDACIÓN 2: Sanitizar email
+    const sanitizedEmail = email.toLowerCase().trim();
+
+    // 🔒 VALIDACIÓN 3: Verificar formato de email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(sanitizedEmail)) {
+      return {
+        success: false,
+        error: 'Formato de email inválido'
+      };
+    }
+
+    // 🔒 VALIDACIÓN 4: Limitar longitud para prevenir ataques de buffer overflow
+    if (sanitizedEmail.length > 255) {
+      return {
+        success: false,
+        error: 'Credenciales inválidas'
+      };
+    }
+
+    if (password.length > 255) {
+      return {
+        success: false,
+        error: 'Credenciales inválidas'
+      };
+    }
+
+    // 🔒 VALIDACIÓN 5: Verificar que la contraseña no contenga caracteres peligrosos
+    // (esto es adicional, Supabase Auth ya maneja esto correctamente)
+    if (password.includes('\0')) {
+      return {
+        success: false,
+        error: 'Credenciales inválidas'
+      };
+    }
+
+    // PASO 1: Autenticar con Supabase Auth
+    // Supabase Auth usa prepared statements y maneja la sanitización internamente
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      email: sanitizedEmail,
+      password
+    });
+
+    if (signInError) {
+      console.error('Error de autenticación Supabase:', signInError);
+      
+      // Mensajes de error específicos para el usuario
+      const errorMessage = signInError.message === 'Invalid login credentials' 
+        ? 'Credenciales inválidas. Por favor verifica tu correo y contraseña.'
+        : signInError.message;
+      
+      return {
+        success: false,
+        error: errorMessage
+      };
+    }
+
+    if (!data?.session?.access_token || !data?.user?.email) {
+      return {
+        success: false,
+        error: 'Error al obtener sesión. Inténtalo de nuevo.'
+      };
+    }
+
+    // PASO 2: Obtener datos del usuario desde la BD a través del backend
+    const userEmail = data.user.email;
+    const url = `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/usuario/${encodeURIComponent(userEmail)}`;
+    
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${publicAnonKey}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        console.error(`Error HTTP ${response.status} al obtener datos del usuario`);
+        const errorData = await response.json().catch(() => ({}));
+        
+        // Si la BD no está configurada, mostrar helper
+        if (errorData.error?.includes('Base de datos no configurada') ||
+            errorData.error?.includes('relation') ||
+            errorData.error?.includes('does not exist')) {
+          // Cerrar sesión de Supabase
+          await supabaseSignOut();
+          throw new Error('Base de datos no configurada. Por favor ejecuta los scripts SQL en Supabase.');
+        }
+        
+        // Cerrar sesión de Supabase si no se encuentra el usuario en BD
+        await supabaseSignOut();
+        throw new Error(errorData.error || 'Usuario no encontrado en la base de datos. Contacta al administrador.');
+      }
+
+      const result = await response.json();
+
+      if (!result.success || !result.usuario) {
+        // Cerrar sesión de Supabase
+        await supabaseSignOut();
+        throw new Error('Usuario no encontrado en la base de datos. Contacta al administrador.');
+      }
+
+      // PASO 3: Verificar estado del usuario
+      const usuario = result.usuario;
+      
+      if (usuario.estado === 'Suspendido') {
+        await supabaseSignOut();
+        return {
+          success: false,
+          error: 'Su cuenta ha sido suspendida. Contacte al administrador.'
+        };
+      }
+
+      if (usuario.estado === 'Inactivo' || usuario.estado === 'Desactivado') {
+        await supabaseSignOut();
+        return {
+          success: false,
+          error: 'Credenciales incorrectas. Intente nuevamente.'
+        };
+      }
+
+      if (usuario.estado !== 'Activo') {
+        await supabaseSignOut();
+        return {
+          success: false,
+          error: 'Credenciales incorrectas. Intente nuevamente.'
+        };
+      }
+
+      // PASO 4: Éxito - Retornar token y datos del usuario
+      return {
+        success: true,
+        user: usuario,
+        token: data.session.access_token
+      };
+
+    } catch (fetchError: any) {
+      console.error('Error al obtener datos del usuario:', fetchError);
+      
+      // Cerrar sesión de Supabase si hay error
+      await supabaseSignOut();
+      
+      // Propagar el mensaje de error específico
+      throw fetchError;
+    }
+
+  } catch (error: any) {
+    console.error('Error en authenticate:', error);
+    
+    // Mensajes de error específicos
+    if (error.message?.includes('fetch') || error.message?.includes('Failed to fetch')) {
+      return {
+        success: false,
+        error: 'No se pudo conectar con el servidor. Verifica tu conexión a internet.'
+      };
+    }
+    
     return {
       success: false,
-      error: 'Credenciales incorrectas. Intente nuevamente.'
+      error: error.message || 'Error de autenticación. Intente nuevamente.'
     };
   }
+}
 
-  // Verificar estado del usuario
-  if (usuario.estado === 'Suspendido') {
+/**
+ * Cierra la sesión del usuario
+ */
+export async function logout(): Promise<void> {
+  try {
+    // Cerrar sesión en Supabase
+    await supabaseSignOut();
+    
+    // Limpiar TODOS los datos y caché
+    await clearAllData();
+  } catch (error) {
+    console.error('Error al cerrar sesión:', error);
+    // Limpiar TODOS los datos aunque falle Supabase
+    await clearAllData();
+  }
+}
+
+/**
+ * Restaura la sesión desde localStorage
+ * Útil para mantener la sesión activa después de recargar la página
+ */
+export async function restoreSession(): Promise<AuthResult> {
+  try {
+    // Intentar obtener sesión de Supabase primero
+    const session = await getActiveSession();
+    
+    if (!session) {
+      // Si no hay sesión en Supabase, intentar cargar desde localStorage
+      const localSession = loadSession();
+      if (!localSession) {
+        return {
+          success: false,
+          error: 'No hay sesión activa'
+        };
+      }
+
+      // Retornar con los datos guardados localmente
+      return {
+        success: true,
+        user: localSession.user,
+        token: localSession.token
+      };
+    }
+
+    // Si hay sesión en Supabase, retornar con esos datos
+    return {
+      success: true,
+      user: session.user,
+      token: session.access_token
+    };
+
+  } catch (error) {
+    console.error('Error al restaurar sesión:', error);
     return {
       success: false,
-      error: 'Su cuenta ha sido suspendida. Contacte al administrador.'
+      error: 'Error al restaurar la sesión'
     };
   }
-  
-  if (usuario.estado === 'Desactivado') {
-    return {
-      success: false,
-      error: 'Credenciales incorrectas. Intente nuevamente.'
-    };
-  }
-
-  // Solo permitir login si está Activo
-  if (usuario.estado !== 'Activo') {
-    return {
-      success: false,
-      error: 'Credenciales incorrectas. Intente nuevamente.'
-    };
-  }
-
-  // Generar token JWT (simulado por ahora)
-  const token = generateMockToken(usuario);
-
-  return {
-    success: true,
-    user: usuario,
-    token: token  // Token incluido en la respuesta
-  };
 }
 
 /**
@@ -174,144 +511,173 @@ export function validatePasswordDifferent(currentPassword: string, newPassword: 
 }
 
 /**
- * Verifica que la contraseña actual sea correcta
- */
-export function verifyCurrentPassword(userId: string, currentPassword: string): PasswordValidationResult {
-  const usuario = usuarios.find(u => u.id === userId);
-  
-  if (!usuario) {
-    return {
-      isValid: false,
-      error: 'Usuario no encontrado'
-    };
-  }
-
-  if (currentPassword !== usuario.password) {
-    return {
-      isValid: false,
-      error: 'La contraseña actual es incorrecta'
-    };
-  }
-
-  return { isValid: true };
-}
-
-/**
  * 🔄 CAMBIO DE CONTRASEÑAS
  */
 
 /**
- * Cambia la contraseña de un usuario (el usuario cambia su propia contraseña)
+ * Cambia la contraseña del usuario actual (el usuario cambia su propia contraseña)
+ * 
+ * @param currentPassword - Contraseña actual
+ * @param newPassword - Nueva contraseña
+ * @param confirmPassword - Confirmación de nueva contraseña
+ * @returns Resultado del cambio de contraseña
  */
-export function changeOwnPassword(
-  userId: string,
+export async function changeOwnPassword(
   currentPassword: string,
   newPassword: string,
   confirmPassword: string
-): PasswordChangeResult {
-  // Validar contraseña actual
-  const currentPasswordValidation = verifyCurrentPassword(userId, currentPassword);
-  if (!currentPasswordValidation.isValid) {
+): Promise<PasswordChangeResult> {
+  try {
+    // Validar nueva contraseña
+    const newPasswordValidation = validatePassword(newPassword);
+    if (!newPasswordValidation.isValid) {
+      return {
+        success: false,
+        error: newPasswordValidation.error
+      };
+    }
+
+    // Validar que coincidan
+    const matchValidation = validatePasswordMatch(newPassword, confirmPassword);
+    if (!matchValidation.isValid) {
+      return {
+        success: false,
+        error: matchValidation.error
+      };
+    }
+
+    // Validar que sea diferente
+    const differentValidation = validatePasswordDifferent(currentPassword, newPassword);
+    if (!differentValidation.isValid) {
+      return {
+        success: false,
+        error: differentValidation.error
+      };
+    }
+
+    // Obtener sesión actual
+    const session = await getActiveSession();
+    if (!session || !session.user) {
+      return {
+        success: false,
+        error: 'No hay sesión activa. Por favor inicie sesión nuevamente.'
+      };
+    }
+
+    // Re-autenticar con contraseña actual para verificar
+    const { error: reAuthError } = await supabase.auth.signInWithPassword({
+      email: session.user.email,
+      password: currentPassword
+    });
+
+    if (reAuthError) {
+      return {
+        success: false,
+        error: 'La contraseña actual es incorrecta'
+      };
+    }
+
+    // Cambiar contraseña en Supabase Auth
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword
+    });
+
+    if (updateError) {
+      console.error('Error al cambiar contraseña:', updateError);
+      return {
+        success: false,
+        error: 'Error al cambiar la contraseña. Intente nuevamente.'
+      };
+    }
+
+    return { success: true };
+
+  } catch (error) {
+    console.error('Error en changeOwnPassword:', error);
     return {
       success: false,
-      error: currentPasswordValidation.error
+      error: 'Error al cambiar la contraseña. Intente nuevamente.'
     };
   }
-
-  // Validar nueva contraseña
-  const newPasswordValidation = validatePassword(newPassword);
-  if (!newPasswordValidation.isValid) {
-    return {
-      success: false,
-      error: newPasswordValidation.error
-    };
-  }
-
-  // Validar que coincidan
-  const matchValidation = validatePasswordMatch(newPassword, confirmPassword);
-  if (!matchValidation.isValid) {
-    return {
-      success: false,
-      error: matchValidation.error
-    };
-  }
-
-  // Validar que sea diferente
-  const differentValidation = validatePasswordDifferent(currentPassword, newPassword);
-  if (!differentValidation.isValid) {
-    return {
-      success: false,
-      error: differentValidation.error
-    };
-  }
-
-  // Actualizar contraseña
-  const usuario = usuarios.find(u => u.id === userId);
-  if (usuario) {
-    usuario.password = newPassword;
-  }
-
-  return { success: true };
 }
 
 /**
- * Cambia la contraseña de otro usuario (administrador cambia contraseña)
+ * Cambia la contraseña de otro usuario (solo administrador)
+ * 
+ * @param targetUserId - ID del usuario objetivo
+ * @param newPassword - Nueva contraseña
+ * @param confirmPassword - Confirmación de nueva contraseña
+ * @returns Resultado del cambio de contraseña
  */
-export function changeUserPasswordByAdmin(
-  adminUserId: string,
+export async function changeUserPasswordByAdmin(
   targetUserId: string,
   newPassword: string,
   confirmPassword: string
-): PasswordChangeResult {
-  const adminUser = usuarios.find(u => u.id === adminUserId);
-  const targetUser = usuarios.find(u => u.id === targetUserId);
+): Promise<PasswordChangeResult> {
+  try {
+    // Validar nueva contraseña
+    const newPasswordValidation = validatePassword(newPassword);
+    if (!newPasswordValidation.isValid) {
+      return {
+        success: false,
+        error: newPasswordValidation.error
+      };
+    }
 
-  // Validar que el admin existe y es Administrador
-  if (!adminUser || adminUser.rol !== 'Administrador') {
+    // Validar que coincidan
+    const matchValidation = validatePasswordMatch(newPassword, confirmPassword);
+    if (!matchValidation.isValid) {
+      return {
+        success: false,
+        error: matchValidation.error
+      };
+    }
+
+    // Obtener token de la sesión actual
+    const session = loadSession();
+    if (!session || !session.token) {
+      return {
+        success: false,
+        error: 'No hay sesión activa. Por favor inicie sesión nuevamente.'
+      };
+    }
+
+    // Llamar al endpoint del backend para cambiar contraseña
+    // El backend verifica los permisos (Administrador o Coordinador)
+    const url = `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/cambiar-contrasena`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ userId: targetUserId, newPassword })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `HTTP ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error || 'Error al cambiar la contraseña'
+      };
+    }
+
+    return { success: true };
+
+  } catch (error) {
+    console.error('Error en changeUserPasswordByAdmin:', error);
     return {
       success: false,
-      error: 'No tienes permisos para realizar esta acción'
+      error: error instanceof Error ? error.message : 'Error al cambiar la contraseña. Intente nuevamente.'
     };
   }
-
-  // Validar que el usuario objetivo existe
-  if (!targetUser) {
-    return {
-      success: false,
-      error: 'Usuario no encontrado'
-    };
-  }
-
-  // NUNCA se puede cambiar la contraseña de un Administrador (solo ellos mismos)
-  if (targetUser.rol === 'Administrador') {
-    return {
-      success: false,
-      error: 'No se puede cambiar la contraseña de un Administrador'
-    };
-  }
-
-  // Validar nueva contraseña
-  const newPasswordValidation = validatePassword(newPassword);
-  if (!newPasswordValidation.isValid) {
-    return {
-      success: false,
-      error: newPasswordValidation.error
-    };
-  }
-
-  // Validar que coincidan
-  const matchValidation = validatePasswordMatch(newPassword, confirmPassword);
-  if (!matchValidation.isValid) {
-    return {
-      success: false,
-      error: matchValidation.error
-    };
-  }
-
-  // Actualizar contraseña
-  targetUser.password = newPassword;
-
-  return { success: true };
 }
 
 /**
@@ -319,54 +685,33 @@ export function changeUserPasswordByAdmin(
  */
 
 /**
- * Obtiene un usuario por su ID
+ * Obtiene el usuario desde la sesión guardada
  */
-export function getUserById(userId: string): any | null {
-  return usuarios.find(u => u.id === userId) || null;
+export function getCurrentUser(): any | null {
+  const session = loadSession();
+  return session?.user || null;
 }
 
 /**
- * Obtiene el usuario desde un token JWT
- * NOTA: En producción, el backend validará el token
+ * Obtiene el token de la sesión guardada
  */
-export function getUserFromToken(token: string): any | null {
-  const payload = decodeMockToken(token);
-  if (!payload) {
-    return null;
-  }
-  
-  // Obtener el usuario desde la base de datos usando el ID del token
-  const usuario = getUserById(payload.id);
-  
-  // Verificar que el usuario aún esté activo
-  if (!usuario || usuario.estado !== 'Activo') {
-    return null;
-  }
-  
-  return usuario;
-}
-
-/**
- * Obtiene un usuario por su email
- */
-export function getUserByEmail(email: string): any | null {
-  return usuarios.find(u => u.email === email) || null;
+export function getCurrentToken(): string | null {
+  const session = loadSession();
+  return session?.token || null;
 }
 
 /**
  * Verifica si un usuario está activo
  */
-export function isUserActive(userId: string): boolean {
-  const usuario = usuarios.find(u => u.id === userId);
-  return usuario?.estado === 'Activo';
+export function isUserActive(user: any): boolean {
+  return user?.estado === 'Activo';
 }
 
 /**
  * Obtiene el estado de un usuario
  */
-export function getUserStatus(userId: string): string | null {
-  const usuario = usuarios.find(u => u.id === userId);
-  return usuario?.estado || null;
+export function getUserStatus(user: any): string | null {
+  return user?.estado || null;
 }
 
 /**
@@ -375,22 +720,30 @@ export function getUserStatus(userId: string): string | null {
 export const authService = {
   // Autenticación
   authenticate,
-  getUserFromToken,
-  decodeMockToken,
+  logout,
+  restoreSession,
+  
+  // Sesión
+  saveSession,
+  loadSession,
+  clearSession,
+  clearAllData,
+  isSessionValid,
+  getCurrentUser,
+  getCurrentToken,
   
   // Validación de contraseñas
   validatePassword,
   validatePasswordMatch,
   validatePasswordDifferent,
-  verifyCurrentPassword,
   
   // Cambio de contraseñas
   changeOwnPassword,
   changeUserPasswordByAdmin,
   
   // Utilidades
-  getUserById,
-  getUserByEmail,
   isUserActive,
   getUserStatus
 };
+
+export default authService;

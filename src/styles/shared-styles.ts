@@ -125,9 +125,9 @@ export const badgeStyles = {
     leve: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-green-300 dark:border-green-700 text-xs font-normal px-2.5 py-0.5",
   },
   
-  // Prioridad
+  // Prioridad (debe coincidir con gravedad para estandarización)
   prioridad: {
-    alta: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-300 dark:border-red-700 text-xs font-normal px-2.5 py-0.5",
+    alta: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 border-orange-300 dark:border-orange-700 text-xs font-normal px-2.5 py-0.5",
     media: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-300 dark:border-yellow-700 text-xs font-normal px-2.5 py-0.5",
     baja: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-green-300 dark:border-green-700 text-xs font-normal px-2.5 py-0.5",
   },
@@ -406,12 +406,17 @@ export const getPrioridadBadgeClass = (prioridad: string): string => {
   switch (prioridadLower) {
     case 'crítica':
     case 'critica':
+    case 'crítico':
+    case 'critico':
       return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-300 dark:border-red-700 text-xs font-normal px-2.5 py-0.5';
     case 'alta':
+    case 'grave':
       return badgeStyles.prioridad.alta;
     case 'media':
+    case 'moderado':
       return badgeStyles.prioridad.media;
     case 'baja':
+    case 'leve':
       return badgeStyles.prioridad.baja;
     default:
       return badgeStyles.prioridad.baja;
@@ -836,8 +841,8 @@ export const headerStyles = {
   // Sección derecha (usuario + acciones)
   right: "flex items-center gap-2 flex-shrink-0",
   
-  // Info del usuario (solo desktop XL)
-  userInfo: "text-right hidden xl:block",
+  // Info del usuario (visible en desktop y tablet)
+  userInfo: "text-right hidden md:block",
   userName: "font-medium text-white text-sm leading-tight",
   userRole: "text-xs text-green-50/80 flex items-center gap-1.5 justify-end leading-tight",
   userRoleDot: "w-1.5 h-1.5 rounded-full bg-green-300",

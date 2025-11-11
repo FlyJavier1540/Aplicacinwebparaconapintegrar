@@ -12,6 +12,8 @@ import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { AreaProtegida, Guardarecurso } from '../types';
 import { Search, Clock, CheckCircle, FileText } from 'lucide-react';
+import { projectId } from './supabase/info';
+import { getRequiredAuthToken } from './base-api-service';
 
 /**
  * Interface para hallazgo
@@ -20,12 +22,15 @@ export interface Hallazgo {
   id: string;
   titulo: string;
   descripcion: string;
-  prioridad: 'Baja' | 'Media' | 'Alta' | 'Crítica';
+  prioridad: 'Leve' | 'Moderado' | 'Grave' | 'Crítico';
   estado: 'Reportado' | 'En Investigación' | 'En Proceso' | 'Resuelto';
   ubicacion: string;
   coordenadas?: { lat: number; lng: number };
   areaProtegida: string;
+  areaProtegidaNombre?: string;
+  actividadId?: string | null;
   guardarecurso: string;
+  guardarecursoNombre?: string;
   fechaReporte: string;
   fechaResolucion?: string;
   observaciones?: string;
@@ -100,17 +105,29 @@ export function filterHallazgos(
 }
 
 /**
- * Separa hallazgos activos (no resueltos)
+ * Separa hallazgos activos (no resueltos) y los ordena de más reciente a más antiguo
  */
 export function getHallazgosActivos(hallazgos: Hallazgo[]): Hallazgo[] {
-  return hallazgos.filter(h => h.estado !== 'Resuelto');
+  return hallazgos
+    .filter(h => h.estado !== 'Resuelto')
+    .sort((a, b) => {
+      const dateA = new Date(a.fechaReporte);
+      const dateB = new Date(b.fechaReporte);
+      return dateB.getTime() - dateA.getTime(); // Orden descendente (más reciente primero)
+    });
 }
 
 /**
- * Separa hallazgos resueltos
+ * Separa hallazgos resueltos y los ordena de más reciente a más antiguo
  */
 export function getHallazgosResueltos(hallazgos: Hallazgo[]): Hallazgo[] {
-  return hallazgos.filter(h => h.estado === 'Resuelto');
+  return hallazgos
+    .filter(h => h.estado === 'Resuelto')
+    .sort((a, b) => {
+      const dateA = new Date(a.fechaReporte);
+      const dateB = new Date(b.fechaReporte);
+      return dateB.getTime() - dateA.getTime(); // Orden descendente (más reciente primero)
+    });
 }
 
 /**
@@ -122,19 +139,19 @@ export function getHallazgosResueltos(hallazgos: Hallazgo[]): Hallazgo[] {
  */
 export function getPrioridadInfo(prioridad: string) {
   switch (prioridad) {
-    case 'Crítica':
+    case 'Crítico':
       return {
         badge: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-300 dark:border-red-700'
       };
-    case 'Alta':
+    case 'Grave':
       return {
         badge: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 border-orange-300 dark:border-orange-700'
       };
-    case 'Media':
+    case 'Moderado':
       return {
         badge: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-300 dark:border-yellow-700'
       };
-    case 'Baja':
+    case 'Leve':
       return {
         badge: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-green-300 dark:border-green-700'
       };
@@ -366,6 +383,261 @@ export function createEmptySeguimientoFormData(): SeguimientoFormData {
     accion: '',
     observaciones: ''
   };
+}
+
+/**
+ * ============================================================================
+ * 🌐 LLAMADAS A LA API CON CACHÉ
+ * ============================================================================
+ */
+
+/**
+ * Cache para hallazgos con TTL (Time To Live) de 30 segundos
+ */
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+const CACHE_TTL = 30000; // 30 segundos
+let hallazgosCache: CacheEntry<Hallazgo[]> | null = null;
+
+/**
+ * Verifica si el cache es válido (no ha expirado)
+ */
+function isCacheValid(cache: CacheEntry<any> | null): boolean {
+  if (!cache) return false;
+  return Date.now() - cache.timestamp < CACHE_TTL;
+}
+
+/**
+ * Invalida el cache de hallazgos
+ */
+export function invalidarCacheHallazgos(): void {
+  hallazgosCache = null;
+}
+
+/**
+ * Obtiene todos los hallazgos desde la base de datos
+ * @param accessToken - Token de autenticación
+ * @returns Promise con array de hallazgos
+ */
+export async function fetchHallazgos(accessToken: string): Promise<Hallazgo[]> {
+  try {
+    // Verificar cache
+    if (isCacheValid(hallazgosCache)) {
+      console.log('📦 [HallazgosService] Usando hallazgos desde caché');
+      return hallazgosCache!.data;
+    }
+
+    const url = `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/hallazgos`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Error al obtener hallazgos');
+    }
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Error al obtener hallazgos');
+    }
+
+    const hallazgos = data.hallazgos || [];
+
+    // Guardar en cache
+    hallazgosCache = {
+      data: hallazgos,
+      timestamp: Date.now()
+    };
+    console.log('💾 [HallazgosService] Hallazgos guardados en caché');
+
+    return hallazgos;
+  } catch (error) {
+    console.error('Error fetching hallazgos:', error);
+    throw error;
+  }
+}
+
+/**
+ * Crea un nuevo hallazgo en la base de datos
+ * @param accessToken - Token de autenticación
+ * @param hallazgoData - Datos del hallazgo a crear
+ * @returns Promise con el hallazgo creado
+ */
+export async function createHallazgoAPI(
+  accessToken: string,
+  hallazgoData: HallazgoFormData
+): Promise<Hallazgo> {
+  try {
+    const url = `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/hallazgos`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(hallazgoData)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Error al crear hallazgo');
+    }
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Error al crear hallazgo');
+    }
+
+    // Invalidar cache después de crear
+    invalidarCacheHallazgos();
+
+    return data.hallazgo;
+  } catch (error) {
+    console.error('Error creating hallazgo:', error);
+    throw error;
+  }
+}
+
+/**
+ * Cambia el estado de un hallazgo
+ * @param accessToken - Token de autenticación
+ * @param hallazgoId - ID del hallazgo
+ * @param nuevoEstado - Nuevo estado
+ * @returns Promise con el hallazgo actualizado
+ */
+export async function cambiarEstadoAPI(
+  accessToken: string,
+  hallazgoId: string,
+  nuevoEstado: string
+): Promise<Hallazgo> {
+  try {
+    const url = `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/hallazgos/${hallazgoId}/estado`;
+
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ nuevoEstado })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Error al cambiar estado');
+    }
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Error al cambiar estado');
+    }
+
+    // Invalidar cache después de cambiar estado
+    invalidarCacheHallazgos();
+
+    return data.hallazgo;
+  } catch (error) {
+    console.error('Error changing estado:', error);
+    throw error;
+  }
+}
+
+/**
+ * Elimina un hallazgo de la base de datos
+ * @param accessToken - Token de autenticación
+ * @param hallazgoId - ID del hallazgo a eliminar
+ * @returns Promise<void>
+ */
+export async function deleteHallazgoAPI(
+  accessToken: string,
+  hallazgoId: string
+): Promise<void> {
+  try {
+    const url = `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/hallazgos/${hallazgoId}`;
+
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Error al eliminar hallazgo');
+    }
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Error al eliminar hallazgo');
+    }
+
+    // Invalidar cache después de eliminar
+    invalidarCacheHallazgos();
+  } catch (error) {
+    console.error('Error deleting hallazgo:', error);
+    throw error;
+  }
+}
+
+/**
+ * Agrega un seguimiento a un hallazgo en la base de datos
+ * @param accessToken - Token de autenticación
+ * @param hallazgoId - ID del hallazgo
+ * @param seguimientoData - Datos del seguimiento
+ * @returns Promise con el seguimiento creado
+ */
+export async function agregarSeguimientoAPI(
+  accessToken: string,
+  hallazgoId: string,
+  seguimientoData: SeguimientoFormData
+): Promise<any> {
+  try {
+    const url = `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/hallazgos/${hallazgoId}/seguimiento`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(seguimientoData)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Error al agregar seguimiento');
+    }
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Error al agregar seguimiento');
+    }
+
+    // Invalidar cache después de agregar seguimiento
+    invalidarCacheHallazgos();
+
+    return data.seguimiento;
+  } catch (error) {
+    console.error('Error adding seguimiento:', error);
+    throw error;
+  }
 }
 
 /**
@@ -630,6 +902,16 @@ export function generarReportePDF(
  * Servicio de Hallazgos - Export centralizado
  */
 export const hallazgosService = {
+  // API
+  fetchHallazgos,
+  createHallazgoAPI,
+  cambiarEstadoAPI,
+  deleteHallazgoAPI,
+  agregarSeguimientoAPI,
+  
+  // Cache
+  invalidarCacheHallazgos,
+  
   // Filtrado
   filterHallazgos,
   getHallazgosActivos,
@@ -639,7 +921,7 @@ export const hallazgosService = {
   getPrioridadInfo,
   getEstadoBadgeVariant,
   
-  // CRUD
+  // CRUD (local)
   createHallazgo,
   updateHallazgo,
   

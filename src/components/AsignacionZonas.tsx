@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback, memo } from 'react';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -9,11 +9,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Textarea } from './ui/textarea';
 import { Plus, MapPin, Edit, Search, Globe, Trees, Map, CheckCircle2, XCircle, TreePine } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from './ui/alert-dialog';
-import { areasProtegidas, guardarecursos } from '../data/mock-data';
+import { Guardarecurso } from '../types';
+import { guardarecursosService } from '../utils/guardarecursosService';
 import { AreaProtegida } from '../types';
 import { buttonStyles, filterStyles, formStyles, listCardStyles, layoutStyles, estadoAlertStyles, cardStyles, getEstadoTopLineColor, getEstadoBadgeClass } from '../styles/shared-styles';
 import { toast } from 'sonner@2.0.3';
-import { areasProtegidasService, AreaEstadoPendiente } from '../utils/areasProtegidasService';
+import { areasProtegidasService, AreaEstadoPendiente, AreaProtegidaFormData } from '../utils/areasProtegidasService';
+import { forceLogout } from '../utils/base-api-service';
 
 interface AsignacionZonasProps {
   userPermissions: {
@@ -24,9 +26,114 @@ interface AsignacionZonasProps {
   };
 }
 
+// ===== COMPONENTES MEMOIZADOS =====
+
+/**
+ * Card de área protegida - Memoizado
+ */
+interface AreaCardProps {
+  area: AreaProtegida;
+  canEdit: boolean;
+  canDelete: boolean;
+  onEdit: (area: AreaProtegida) => void;
+  onEstadoClick: (area: AreaProtegida) => void;
+}
+
+const AreaCard = memo(({ area, canEdit, canDelete, onEdit, onEstadoClick }: AreaCardProps) => {
+  const handleEdit = useCallback(() => onEdit(area), [onEdit, area]);
+  const handleEstadoClick = useCallback(() => onEstadoClick(area), [onEstadoClick, area]);
+  
+  return (
+    <Card className={`${cardStyles.baseWithOverflow} ${listCardStyles.card}`}>
+      <div className={getEstadoTopLineColor(area.estado)} />
+      <CardContent className={listCardStyles.content}>
+        {/* Header con nombre y acciones */}
+        <div className={listCardStyles.header}>
+          <div className={listCardStyles.headerContent}>
+            <h3 className={listCardStyles.title}>{area.nombre}</h3>
+            <Badge className={`${getEstadoBadgeClass(area.estado)} ${listCardStyles.badge}`}>
+              {area.estado}
+            </Badge>
+          </div>
+          <div className={listCardStyles.headerActions}>
+            {canEdit && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleEdit}
+                className={listCardStyles.actionButtonEdit}
+              >
+                <Edit className="h-4 w-4" />
+              </Button>
+            )}
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleEstadoClick}
+                className={
+                  area.estado === 'Activo'
+                    ? listCardStyles.actionButtonDeactivate
+                    : listCardStyles.actionButtonActivate
+                }
+                title={area.estado === 'Activo' ? 'Desactivar área' : 'Activar área'}
+              >
+                {area.estado === 'Activo' ? (
+                  <XCircle className="h-4 w-4" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4" />
+                )}
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Información del área */}
+        <div className={listCardStyles.infoSection}>
+          <div className={listCardStyles.infoItem}>
+            <MapPin className={listCardStyles.infoIcon} />
+            <span className={listCardStyles.infoText}>{area.departamento}</span>
+          </div>
+
+          <div className={listCardStyles.infoItem}>
+            <Globe className={listCardStyles.infoIcon} />
+            <span className={listCardStyles.infoText}>
+              {area.extension.toLocaleString()} ha
+            </span>
+          </div>
+
+          <div className={listCardStyles.infoItem}>
+            <TreePine className={listCardStyles.infoIcon} />
+            <span className={listCardStyles.infoText}>{area.ecosistemas[0]}</span>
+          </div>
+
+          <div className={listCardStyles.infoItem}>
+            <Map className={listCardStyles.infoIcon} />
+            <div className={listCardStyles.infoText}>
+              <div>Lat: {area.coordenadas.lat}</div>
+              <div>Lng: {area.coordenadas.lng}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Descripción */}
+        <p className={listCardStyles.description}>
+          {area.descripcion}
+        </p>
+      </CardContent>
+    </Card>
+  );
+});
+
+AreaCard.displayName = 'AreaCard';
+
+// ===== COMPONENTE PRINCIPAL =====
+
 export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
   // Estados principales
-  const [areasList, setAreasList] = useState(areasProtegidas);
+  const [areasList, setAreasList] = useState<AreaProtegida[]>([]);
+  const [guardarecursosList, setGuardarecursosList] = useState<Guardarecurso[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDepartamento, setSelectedDepartamento] = useState<string>('todos');
   
@@ -41,11 +148,50 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
   // Form data usando el servicio
   const [formData, setFormData] = useState(areasProtegidasService.createEmptyFormData());
 
-  // Opciones desde el servicio
-  const ecosistemas = areasProtegidasService.ecosistemas;
-  const departamentos = areasProtegidasService.departamentos;
+  /**
+   * Cargar áreas - Memoizado
+   * 🔒 SEGURIDAD: Si hay error, fuerza logout
+   */
+  const loadAreas = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const data = await areasProtegidasService.fetchAreasProtegidas();
+      setAreasList(data);
+    } catch (error) {
+      console.error('❌ ERROR AL CARGAR ÁREAS - FORZANDO LOGOUT:', error);
+      forceLogout();
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
-  // Filtros usando el servicio
+  /**
+   * Cargar guardarecursos - Memoizado
+   * 🔒 SEGURIDAD: Si hay error, fuerza logout
+   */
+  const loadGuardarecursos = useCallback(async () => {
+    try {
+      const data = await guardarecursosService.fetchGuardarecursos();
+      setGuardarecursosList(data);
+    } catch (error) {
+      console.error('❌ ERROR AL CARGAR GUARDARECURSOS - FORZANDO LOGOUT:', error);
+      forceLogout();
+    }
+  }, []);
+
+  // Cargar áreas y guardarecursos al montar el componente
+  useEffect(() => {
+    loadAreas();
+    loadGuardarecursos();
+  }, [loadAreas, loadGuardarecursos]);
+
+  // Opciones desde el servicio - Memoizadas
+  const ecosistemas = useMemo(() => areasProtegidasService.ecosistemas, []);
+  const departamentos = useMemo(() => areasProtegidasService.departamentos, []);
+
+  /**
+   * Filtros usando el servicio - Memoizado
+   */
   const filteredAreas = useMemo(() => {
     return areasProtegidasService.filterAreasProtegidas(
       areasList,
@@ -54,42 +200,57 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
     );
   }, [areasList, searchTerm, selectedDepartamento]);
 
-  // Funciones de manejo usando el servicio
-  const handleSubmit = (e: React.FormEvent) => {
+  /**
+   * Handler para submit - Memoizado
+   */
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (editingArea) {
-      // Actualizar usando el servicio
-      const areaActualizada = areasProtegidasService.updateAreaProtegida(editingArea, formData);
-      setAreasList(prev => prev.map(a => 
-        a.id === editingArea.id ? areaActualizada : a
-      ));
-    } else {
-      // Crear usando el servicio
-      const nuevaArea = areasProtegidasService.createAreaProtegida(formData);
-      setAreasList(prev => [...prev, nuevaArea]);
+    try {
+      if (editingArea) {
+        await areasProtegidasService.updateAreaProtegidaAPI(editingArea.id, formData);
+        toast.success('Área actualizada', {
+          description: 'El área protegida ha sido actualizada correctamente.'
+        });
+      } else {
+        await areasProtegidasService.createAreaProtegidaAPI(formData);
+        toast.success('Área creada', {
+          description: 'El área protegida ha sido creada exitosamente.'
+        });
+      }
+      
+      await loadAreas();
+      resetForm();
+      setIsDialogOpen(false);
+    } catch (error: any) {
+      console.error('❌ ERROR AL GUARDAR ÁREA - FORZANDO LOGOUT:', error);
+      forceLogout();
     }
-    
-    resetForm();
-    setIsDialogOpen(false);
-  };
+  }, [editingArea, formData, loadAreas]);
 
-  const resetForm = () => {
+  /**
+   * Resetear formulario - Memoizado
+   */
+  const resetForm = useCallback(() => {
     setFormData(areasProtegidasService.createEmptyFormData());
     setEditingArea(null);
-  };
+  }, []);
 
-  const handleEdit = (area: AreaProtegida) => {
+  /**
+   * Handler para editar - Memoizado
+   */
+  const handleEdit = useCallback((area: AreaProtegida) => {
     setFormData(areasProtegidasService.areaToFormData(area));
     setEditingArea(area);
     setIsDialogOpen(true);
-  };
+  }, []);
 
-  const handleEstadoClick = (area: AreaProtegida) => {
-    // Determinar nuevo estado usando el servicio
+  /**
+   * Handler para cambio de estado - Memoizado
+   */
+  const handleEstadoClick = useCallback((area: AreaProtegida) => {
     const nuevoEstado = areasProtegidasService.toggleEstado(area.estado);
     
-    // Validar cambio de estado
     if (!areasProtegidasService.isValidEstadoChange(area.estado, nuevoEstado)) {
       toast.info('Sin cambios', {
         description: `El área ya está en estado ${nuevoEstado}.`
@@ -99,7 +260,21 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
 
     // Si intenta desactivar, validar usando el servicio
     if (nuevoEstado === 'Desactivado') {
-      const validation = areasProtegidasService.validateAreaDeactivation(area, guardarecursos);
+      console.log('🔍 Validando desactivación de área:', {
+        areaId: area.id,
+        areaNombre: area.nombre,
+        totalGuardarecursos: guardarecursosList.length,
+        guardarecursos: guardarecursosList.map(g => ({
+          id: g.id,
+          nombre: `${g.nombre} ${g.apellido}`,
+          area: g.areaAsignada,
+          estado: g.estado
+        }))
+      });
+      
+      const validation = areasProtegidasService.validateAreaDeactivation(area, guardarecursosList);
+      
+      console.log('📊 Resultado de validación:', validation);
       
       if (!validation.isValid) {
         toast.error('No se puede desactivar', {
@@ -110,34 +285,62 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
       }
     }
 
-    // Preparar estado pendiente usando el servicio
     setEstadoPendiente(
       areasProtegidasService.prepareEstadoPendiente(area, nuevoEstado)
     );
     setConfirmDialogOpen(true);
-  };
+  }, [guardarecursosList]);
 
-  const confirmEstadoChange = () => {
+  /**
+   * Confirmar cambio de estado - Memoizado
+   */
+  const confirmEstadoChange = useCallback(async () => {
     if (!estadoPendiente) return;
 
     const { id, nuevoEstado, nombre } = estadoPendiente;
 
-    // Actualizar el área usando el servicio
-    setAreasList(prev => prev.map(area =>
-      area.id === id ? areasProtegidasService.updateEstado(area, nuevoEstado) : area
-    ));
+    try {
+      await areasProtegidasService.cambiarEstadoAreaAPI(id, nuevoEstado);
 
-    // Obtener mensaje usando el servicio
-    const mensaje = areasProtegidasService.getEstadoMensaje(nuevoEstado);
+      const mensaje = areasProtegidasService.getEstadoMensaje(nuevoEstado);
 
-    toast.success('Estado actualizado', {
-      description: `${nombre} ha sido ${mensaje}.`
-    });
+      toast.success('Estado actualizado', {
+        description: `${nombre} ha sido ${mensaje}.`
+      });
 
-    // Limpiar y cerrar
+      await loadAreas();
+
+      setConfirmDialogOpen(false);
+      setEstadoPendiente(null);
+    } catch (error: any) {
+      console.error('❌ ERROR AL CAMBIAR ESTADO - FORZANDO LOGOUT:', error);
+      forceLogout();
+    }
+  }, [estadoPendiente, loadAreas]);
+
+  /**
+   * Handler para abrir diálogo nuevo - Memoizado
+   */
+  const handleOpenNewDialog = useCallback(() => {
+    resetForm();
+    setIsDialogOpen(true);
+  }, [resetForm]);
+
+  /**
+   * Handler para cancelar diálogo - Memoizado
+   */
+  const handleCancelDialog = useCallback(() => {
+    resetForm();
+    setIsDialogOpen(false);
+  }, [resetForm]);
+
+  /**
+   * Handler para cancelar confirmación - Memoizado
+   */
+  const handleCancelConfirm = useCallback(() => {
     setConfirmDialogOpen(false);
     setEstadoPendiente(null);
-  };
+  }, []);
 
   return (
     <div className={layoutStyles.container}>
@@ -174,10 +377,7 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
         {/* Botón crear */}
         {userPermissions.canCreate && (
           <Button 
-            onClick={() => {
-              resetForm();
-              setIsDialogOpen(true);
-            }}
+            onClick={handleOpenNewDialog}
             className={buttonStyles.createButton}
           >
             <Plus className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-2" />
@@ -206,22 +406,30 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
                 
                 <div className={formStyles.grid}>
                   <div className={formStyles.field}>
-                    <Label htmlFor="nombre" className={formStyles.label}>Nombre del Área *</Label>
+                    <Label htmlFor="nombre" className={formStyles.label}>
+                      Nombre del Área *
+                      {editingArea && <span className="ml-2 text-xs text-muted-foreground">(No editable)</span>}
+                    </Label>
                     <Input
                       id="nombre"
                       value={formData.nombre}
                       onChange={(e) => setFormData({...formData, nombre: e.target.value})}
                       placeholder="Ej: Parque Nacional Tikal"
                       className={formStyles.input}
+                      disabled={!!editingArea}
                       required
                     />
                   </div>
 
                   <div className={formStyles.field}>
-                    <Label htmlFor="departamento" className={formStyles.label}>Departamento *</Label>
+                    <Label htmlFor="departamento" className={formStyles.label}>
+                      Departamento *
+                      {editingArea && <span className="ml-2 text-xs text-muted-foreground">(No editable)</span>}
+                    </Label>
                     <Select 
                       value={formData.departamento} 
                       onValueChange={(value) => setFormData({...formData, departamento: value})}
+                      disabled={!!editingArea}
                     >
                       <SelectTrigger className={formStyles.selectTrigger}>
                         <SelectValue placeholder="Seleccione departamento" />
@@ -269,7 +477,10 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
                 
                 <div className={formStyles.grid}>
                   <div className={formStyles.field}>
-                    <Label htmlFor="lat" className={formStyles.label}>Latitud *</Label>
+                    <Label htmlFor="lat" className={formStyles.label}>
+                      Latitud *
+                      {editingArea && <span className="ml-2 text-xs text-muted-foreground">(No editable)</span>}
+                    </Label>
                     <Input
                       id="lat"
                       type="number"
@@ -281,12 +492,16 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
                       })}
                       placeholder="17.2328"
                       className={formStyles.input}
+                      disabled={!!editingArea}
                       required
                     />
                   </div>
                   
                   <div className={formStyles.field}>
-                    <Label htmlFor="lng" className={formStyles.label}>Longitud *</Label>
+                    <Label htmlFor="lng" className={formStyles.label}>
+                      Longitud *
+                      {editingArea && <span className="ml-2 text-xs text-muted-foreground">(No editable)</span>}
+                    </Label>
                     <Input
                       id="lng"
                       type="number"
@@ -298,6 +513,7 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
                       })}
                       placeholder="-89.6239"
                       className={formStyles.input}
+                      disabled={!!editingArea}
                       required
                     />
                   </div>
@@ -332,10 +548,7 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
                 <Button 
                   type="button" 
                   variant="outline" 
-                  onClick={() => {
-                    resetForm();
-                    setIsDialogOpen(false);
-                  }}
+                  onClick={handleCancelDialog}
                   className={formStyles.cancelButton}
                 >
                   Cancelar
@@ -353,88 +566,31 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
 
       {/* Grid de áreas protegidas */}
       <div className={layoutStyles.cardGrid}>
-        {filteredAreas.map((area) => (
-          <Card key={area.id} className={`${cardStyles.baseWithOverflow} ${listCardStyles.card}`}>
-            <div className={getEstadoTopLineColor(area.estado)} />
-            <CardContent className={listCardStyles.content}>
-              {/* Header con nombre y acciones */}
-              <div className={listCardStyles.header}>
-                <div className={listCardStyles.headerContent}>
-                  <h3 className={listCardStyles.title}>{area.nombre}</h3>
-                  <Badge className={`${getEstadoBadgeClass(area.estado)} ${listCardStyles.badge}`}>
-                    {area.estado}
-                  </Badge>
+        {isLoading ? (
+          <Card className="col-span-full">
+            <CardContent className="p-8 sm:p-12">
+              <div className={layoutStyles.emptyState}>
+                <div className="w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center animate-pulse">
+                  <Trees className="h-8 w-8 text-gray-400" />
                 </div>
-                <div className={listCardStyles.headerActions}>
-                  {userPermissions.canEdit && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleEdit(area)}
-                      className={listCardStyles.actionButtonEdit}
-                    >
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                  )}
-                  {userPermissions.canDelete && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleEstadoClick(area)}
-                      className={
-                        area.estado === 'Activo'
-                          ? listCardStyles.actionButtonDeactivate
-                          : listCardStyles.actionButtonActivate
-                      }
-                      title={area.estado === 'Activo' ? 'Desactivar área' : 'Activar área'}
-                    >
-                      {area.estado === 'Activo' ? (
-                        <XCircle className="h-4 w-4" />
-                      ) : (
-                        <CheckCircle2 className="h-4 w-4" />
-                      )}
-                    </Button>
-                  )}
+                <div className={layoutStyles.emptyStateTitle}>
+                  Cargando áreas protegidas...
                 </div>
               </div>
-
-              {/* Información del área */}
-              <div className={listCardStyles.infoSection}>
-                <div className={listCardStyles.infoItem}>
-                  <MapPin className={listCardStyles.infoIcon} />
-                  <span className={listCardStyles.infoText}>{area.departamento}</span>
-                </div>
-
-                <div className={listCardStyles.infoItem}>
-                  <Globe className={listCardStyles.infoIcon} />
-                  <span className={listCardStyles.infoText}>
-                    {area.extension.toLocaleString()} ha
-                  </span>
-                </div>
-
-                <div className={listCardStyles.infoItem}>
-                  <TreePine className={listCardStyles.infoIcon} />
-                  <span className={listCardStyles.infoText}>{area.ecosistemas[0]}</span>
-                </div>
-
-                <div className={listCardStyles.infoItem}>
-                  <Map className={listCardStyles.infoIcon} />
-                  <div className={listCardStyles.infoText}>
-                    <div>Lat: {area.coordenadas.lat}</div>
-                    <div>Lng: {area.coordenadas.lng}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Descripción */}
-              <p className={listCardStyles.description}>
-                {area.descripcion}
-              </p>
             </CardContent>
           </Card>
+        ) : filteredAreas.map((area) => (
+          <AreaCard
+            key={area.id}
+            area={area}
+            canEdit={userPermissions.canEdit}
+            canDelete={userPermissions.canDelete}
+            onEdit={handleEdit}
+            onEstadoClick={handleEstadoClick}
+          />
         ))}
       
-        {filteredAreas.length === 0 && (
+        {!isLoading && filteredAreas.length === 0 && (
           <Card className="col-span-full">
             <CardContent className="p-8 sm:p-12">
               <div className="text-center">
@@ -487,10 +643,7 @@ export function AsignacionZonas({ userPermissions }: AsignacionZonasProps) {
           </AlertDialogHeader>
           <AlertDialogFooter className={estadoAlertStyles.footer}>
             <AlertDialogCancel 
-              onClick={() => {
-                setConfirmDialogOpen(false);
-                setEstadoPendiente(null);
-              }}
+              onClick={handleCancelConfirm}
               className={estadoAlertStyles.cancelButton}
             >
               Cancelar

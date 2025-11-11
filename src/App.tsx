@@ -12,7 +12,6 @@ import conapLogo from 'figma:asset/fdba91156d85a5c8ad358d0ec261b66438776557.png'
 import { filterNavigationByRole, getModulePermissions, type UserRole } from './utils/permissions';
 import { dashboardStyles, headerStyles, containerStyles } from './styles/shared-styles';
 import { setAuthToken, getAuthToken, removeAuthToken } from './utils/base-api-service';
-import { getUserFromToken } from './utils/authService';
 import { toast } from 'sonner@2.0.3';
 import { 
   Users, 
@@ -44,10 +43,8 @@ const AsignacionZonas = lazy(() => import('./components/AsignacionZonas').then(m
 const ControlEquipos = lazy(() => import('./components/ControlEquipos').then(m => ({ default: m.ControlEquipos })));
 const PlanificacionActividades = lazy(() => import('./components/PlanificacionActividades').then(m => ({ default: m.PlanificacionActividades })));
 const RegistroDiario = lazy(() => import('./components/RegistroDiario').then(m => ({ default: m.RegistroDiario })));
-const EvidenciasFotograficas = lazy(() => import('./components/EvidenciasFotograficas').then(m => ({ default: m.EvidenciasFotograficas })));
 const GeolocalizacionRutas = lazy(() => import('./components/GeolocalizacionRutas').then(m => ({ default: m.GeolocalizacionRutas })));
 const ReporteHallazgos = lazy(() => import('./components/ReporteHallazgos').then(m => ({ default: m.ReporteHallazgos })));
-const SeguimientoCumplimiento = lazy(() => import('./components/SeguimientoCumplimiento').then(m => ({ default: m.SeguimientoCumplimiento })));
 const RegistroIncidentes = lazy(() => import('./components/RegistroIncidentes').then(m => ({ default: m.RegistroIncidentes })));
 const GestionUsuarios = lazy(() => import('./components/GestionUsuarios').then(m => ({ default: m.GestionUsuarios })));
 
@@ -96,7 +93,6 @@ const navigationCategories = [
     items: [
       { id: 'planificacion', name: 'Planificación de Actividades', icon: Calendar },
       { id: 'registro-diario', name: 'Registro Diario de Campo', icon: Activity },
-      { id: 'evidencias', name: 'Registro Fotográfico', icon: Camera },
       { id: 'geolocalizacion', name: 'Geolocalización de Rutas', icon: Route },
     ]
   },
@@ -110,7 +106,6 @@ const navigationCategories = [
     darkBgGradient: 'from-orange-950/50 to-amber-950/50',
     items: [
       { id: 'hallazgos', name: 'Reporte de Hallazgos', icon: FileText },
-      { id: 'seguimiento', name: 'Seguimiento de Cumplimiento', icon: CheckSquare },
       { id: 'incidentes', name: 'Incidentes con Visitantes', icon: AlertTriangle },
     ]
   },
@@ -153,7 +148,7 @@ const AccessDenied = memo(() => (
 ));
 AccessDenied.displayName = 'AccessDenied';
 
-function AppContent({ currentUser, setCurrentUser }: { currentUser: any, setCurrentUser: (user: any) => void }) {
+function AppContent({ currentUser, setCurrentUser, patrullajeEnProgreso, setPatrullajeEnProgreso, coordenadasRecuperadas, setCoordenadasRecuperadas }: { currentUser: any, setCurrentUser: (user: any) => void, patrullajeEnProgreso: any, setPatrullajeEnProgreso: (patrullaje: any) => void, coordenadasRecuperadas: any[], setCoordenadasRecuperadas: (coords: any[]) => void }) {
   // ===== VISTA INICIAL POR ROL =====
   // 
   // ⚠️ CONFIGURACIÓN DE VISTAS INICIALES:
@@ -217,17 +212,13 @@ function AppContent({ currentUser, setCurrentUser }: { currentUser: any, setCurr
       case 'planificacion':
         return <Suspense fallback={<LoadingFallback />}><PlanificacionActividades userPermissions={permissions} /></Suspense>;
       case 'registro-diario':
-        return <Suspense fallback={<LoadingFallback />}><RegistroDiario userPermissions={permissions} currentUser={currentUser} /></Suspense>;
-      case 'evidencias':
-        return <Suspense fallback={<LoadingFallback />}><EvidenciasFotograficas userPermissions={permissions} currentUser={currentUser} /></Suspense>;
+        return <Suspense fallback={<LoadingFallback />}><RegistroDiario userPermissions={permissions} currentUser={currentUser} patrullajeEnProgreso={patrullajeEnProgreso} coordenadasRecuperadas={coordenadasRecuperadas} onPatrullajeResumido={() => { setPatrullajeEnProgreso(null); setCoordenadasRecuperadas([]); }} /></Suspense>;
       case 'geolocalizacion':
         return <Suspense fallback={<LoadingFallback />}><GeolocalizacionRutas userPermissions={permissions} currentUser={currentUser} /></Suspense>;
       
       // Módulos de Control y Seguimiento
       case 'hallazgos':
         return <Suspense fallback={<LoadingFallback />}><ReporteHallazgos userPermissions={permissions} currentUser={currentUser} /></Suspense>;
-      case 'seguimiento':
-        return <Suspense fallback={<LoadingFallback />}><SeguimientoCumplimiento userPermissions={permissions} currentUser={currentUser} /></Suspense>;
       case 'incidentes':
         return <Suspense fallback={<LoadingFallback />}><RegistroIncidentes userPermissions={permissions} currentUser={currentUser} /></Suspense>;
       
@@ -240,13 +231,26 @@ function AppContent({ currentUser, setCurrentUser }: { currentUser: any, setCurr
     }
   };
 
-  const handleLogout = () => {
-    // Eliminar token JWT de localStorage
-    removeAuthToken();
-    
-    // Limpiar estado del usuario
-    setCurrentUser(null);
-    setActiveSection('dashboard');
+  const handleLogout = async () => {
+    try {
+      // Importar authService dinámicamente para evitar circular dependency
+      const { authService } = await import('./utils/authService');
+      
+      // Cerrar sesión en Supabase y localStorage
+      await authService.logout();
+    } catch (error) {
+      console.error('Error al cerrar sesión:', error);
+    } finally {
+      // Eliminar token JWT de localStorage
+      removeAuthToken();
+      
+      // Limpiar estado del usuario
+      setCurrentUser(null);
+      setActiveSection('dashboard');
+      
+      // Limpiar patrullaje en progreso
+      setPatrullajeEnProgreso(null);
+    }
     
     // Mostrar mensaje de confirmación
     toast.success('Sesión cerrada exitosamente');
@@ -550,38 +554,127 @@ function AppContent({ currentUser, setCurrentUser }: { currentUser: any, setCurr
 export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
+  const [patrullajeEnProgreso, setPatrullajeEnProgreso] = useState<any>(null);
+  const [coordenadasRecuperadas, setCoordenadasRecuperadas] = useState<any[]>([]);
 
   /**
    * =============================================
-   * PERSISTENCIA DE SESIÓN
+   * CONFIGURACIÓN DEL TÍTULO Y FAVICON
    * =============================================
    * 
-   * Al cargar la aplicación, verifica si hay un token JWT guardado
-   * y restaura la sesión del usuario automáticamente
+   * Establece el título de la ventana del navegador
    */
   useEffect(() => {
-    const loadSession = () => {
+    document.title = 'Sistema CONAP';
+    
+    // Actualizar el favicon
+    const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement || document.createElement('link');
+    link.type = 'image/png';
+    link.rel = 'icon';
+    link.href = conapLogo;
+    
+    if (!document.querySelector("link[rel~='icon']")) {
+      document.head.appendChild(link);
+    }
+  }, []);
+
+  /**
+   * =============================================
+   * PERSISTENCIA DE SESIÓN CON SUPABASE
+   * =============================================
+   * 
+   * Al cargar la aplicación, verifica si hay una sesión guardada
+   * y restaura automáticamente usando Supabase
+   * 
+   * 🔒 SEGURIDAD:
+   * - Valida que la sesión no haya expirado (24h)
+   * - Verifica que el token JWT sea válido
+   * - Limpia automáticamente sesiones inválidas
+   */
+  useEffect(() => {
+    const loadSession = async () => {
       try {
-        // Obtener token almacenado
-        const token = getAuthToken();
+        // Importar authService
+        const { authService } = await import('./utils/authService');
         
-        if (token) {
-          // Obtener usuario desde el token
-          const user = getUserFromToken(token);
-          
-          if (user) {
-            // Restaurar sesión
-            setCurrentUser(user);
-            console.log('✅ Sesión restaurada:', user.email);
-          } else {
-            // Token inválido o expirado
+        // Intentar cargar sesión desde localStorage
+        const session = authService.loadSession();
+        
+        if (session && session.user) {
+          // Validar que la sesión tenga los datos mínimos requeridos
+          if (!session.token || !session.user.email || !session.expiresAt) {
+            console.error('❌ Sesión inválida detectada. Limpiando TODO...');
+            
+            // Limpiar TODOS los datos y caché
+            await authService.clearAllData();
             removeAuthToken();
-            console.log('⚠️ Token inválido o expirado, sesión eliminada');
+            setCurrentUser(null);
+            setPatrullajeEnProgreso(null);
+            setCoordenadasRecuperadas([]);
+            setIsLoadingSession(false);
+            
+            alert('Sesión caducada. Por favor inicie sesión nuevamente.');
+            return;
           }
+          
+          // Verificar si está cerca de expirar (menos de 1 hora)
+          const timeUntilExpiry = session.expiresAt - Date.now();
+          const oneHour = 60 * 60 * 1000;
+          
+          if (timeUntilExpiry < oneHour) {
+            console.log(`⏰ Sesión expirará en ${Math.round(timeUntilExpiry / 1000 / 60)} minutos`);
+          }
+          
+          // Configurar token en el cliente HTTP
+          setAuthToken(session.token);
+          
+          // Restaurar usuario
+          setCurrentUser(session.user);
+          console.log('✅ Sesión restaurada:', session.user.email);
+
+          // Verificar si hay patrullajes en progreso
+          try {
+            const { verificarPatrullajesEnProgreso } = await import('./utils/registroDiarioAPI');
+            const resultado = await verificarPatrullajesEnProgreso(session.token);
+            
+            if (resultado.tienePatrullajeEnProgreso && resultado.patrullaje) {
+              console.log('⚠️ Patrullaje en progreso detectado al restaurar sesión:', resultado.patrullaje);
+              console.log('📍 Coordenadas recuperadas:', resultado.coordenadas);
+              setPatrullajeEnProgreso(resultado.patrullaje);
+              setCoordenadasRecuperadas(resultado.coordenadas || []);
+            }
+          } catch (error) {
+            console.error('Error al verificar patrullajes en progreso:', error);
+          }
+        } else {
+          // No hay sesión válida - limpiar todo
+          console.log('ℹ️ No hay sesión guardada. Limpiando datos...');
+          
+          // Limpiar TODOS los datos por seguridad
+          await authService.clearAllData();
+          removeAuthToken();
+          setCurrentUser(null);
+          setPatrullajeEnProgreso(null);
+          setCoordenadasRecuperadas([]);
         }
       } catch (error) {
         console.error('❌ Error al cargar sesión:', error);
+        
+        // Limpiar TODOS los datos en caso de error
+        try {
+          const { authService } = await import('./utils/authService');
+          await authService.clearAllData();
+        } catch (e) {
+          console.error('❌ Error al limpiar datos:', e);
+          // Fallback: limpiar manualmente
+          localStorage.clear();
+          sessionStorage.clear();
+        }
+        
         removeAuthToken();
+        setCurrentUser(null);
+        setPatrullajeEnProgreso(null);
+        setCoordenadasRecuperadas([]);
       } finally {
         setIsLoadingSession(false);
       }
@@ -592,44 +685,111 @@ export default function App() {
 
   /**
    * =============================================
-   * LISTENER DE SESIÓN EXPIRADA
+   * LISTENER DE SESIÓN EXPIRADA / LOGOUT FORZADO
    * =============================================
    * 
-   * Escucha el evento 'auth:unauthorized' que se dispara cuando
-   * una petición retorna 401 (token expirado o inválido)
+   * Escucha eventos que requieren logout inmediato:
+   * - auth:unauthorized: Petición 401 (token expirado/inválido)
+   * - auth:force-logout: Logout forzado desde cualquier componente
+   * 
+   * 🔒 SEGURIDAD: 
+   * - Limpia completamente la sesión
+   * - Elimina tokens JWT
+   * - Limpia estado de patrullaje
+   * - Muestra pantalla de Login
    */
   useEffect(() => {
-    const handleUnauthorized = () => {
-      // Limpiar sesión
+    const handleForceLogout = async (event: any) => {
+      console.log('👂 Evento de logout forzado recibido en App.tsx');
+      console.log('📦 Detalles del evento:', event?.detail || 'Sin detalles');
+      console.log('🔒 Iniciando limpieza COMPLETA de sesión y caché...');
+      
+      // 1. Limpiar estado de patrullaje en progreso PRIMERO
+      setPatrullajeEnProgreso(null);
+      setCoordenadasRecuperadas([]);
+      console.log('✅ Estado de patrullaje limpiado');
+      
+      // 2. Limpiar sesión del usuario (muestra Login automáticamente)
+      console.log('🔄 Estableciendo currentUser a null...');
       setCurrentUser(null);
+      
+      // 3. Limpiar TODOS los datos
+      try {
+        const { authService } = await import('./utils/authService');
+        await authService.clearAllData();
+        console.log('✅ Todos los datos y caché limpiados');
+      } catch (error) {
+        console.error('❌ Error al limpiar datos:', error);
+        localStorage.clear();
+        sessionStorage.clear();
+      }
+      
+      // 4. Limpiar token JWT
       removeAuthToken();
+      console.log('✅ Token JWT eliminado');
       
-      // Mostrar mensaje al usuario
-      toast.error('Tu sesión ha expirado. Por favor inicia sesión nuevamente.');
-      
-      console.log('⚠️ Sesión expirada, redirigiendo a login...');
+      console.log('⚠️ Sesión completamente eliminada. Mostrando login.');
     };
 
-    // Agregar listener
-    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    console.log('🎧 Registrando listeners de logout en App.tsx');
+    
+    // Escuchar AMBOS eventos
+    window.addEventListener('auth:unauthorized', handleForceLogout);
+    window.addEventListener('auth:force-logout', handleForceLogout);
 
     // Cleanup
     return () => {
-      window.removeEventListener('auth:unauthorized', handleUnauthorized);
+      console.log('🧹 Limpiando listeners de logout');
+      window.removeEventListener('auth:unauthorized', handleForceLogout);
+      window.removeEventListener('auth:force-logout', handleForceLogout);
     };
-  }, []);
+  }, [setCurrentUser, setPatrullajeEnProgreso, setCoordenadasRecuperadas]);
 
   /**
-   * Wrapper de setCurrentUser que también guarda el token
+   * Wrapper de setCurrentUser que también guarda el token y la sesión
    */
-  const handleLogin = (authResult: { user: any; token: string }) => {
-    // Guardar token JWT
-    setAuthToken(authResult.token);
-    
-    // Guardar usuario en estado
-    setCurrentUser(authResult.user);
-    
-    console.log('✅ Login exitoso:', authResult.user.email);
+  const handleLogin = async (authResult: { user: any; token: string }) => {
+    try {
+      // Importar authService
+      const { authService } = await import('./utils/authService');
+      
+      // Guardar sesión en localStorage (token + usuario)
+      authService.saveSession(authResult.token, authResult.user);
+      
+      // Guardar token JWT en el cliente HTTP
+      setAuthToken(authResult.token);
+      
+      // Guardar usuario en estado
+      setCurrentUser(authResult.user);
+      
+      console.log('✅ Login exitoso:', authResult.user.email);
+
+      // Verificar si hay patrullajes en progreso
+      try {
+        const { verificarPatrullajesEnProgreso } = await import('./utils/registroDiarioAPI');
+        const resultado = await verificarPatrullajesEnProgreso(authResult.token);
+        
+        if (resultado.tienePatrullajeEnProgreso && resultado.patrullaje) {
+          console.log('⚠️ Patrullaje en progreso detectado:', resultado.patrullaje);
+          console.log('📍 Coordenadas recuperadas:', resultado.coordenadas);
+          setPatrullajeEnProgreso(resultado.patrullaje);
+          setCoordenadasRecuperadas(resultado.coordenadas || []);
+          
+          // Mostrar notificación al usuario
+          toast.warning('Patrullaje en progreso', {
+            description: 'Tienes un patrullaje en progreso. Se abrirá automáticamente.'
+          });
+        }
+      } catch (error) {
+        console.error('Error al verificar patrullajes en progreso:', error);
+      }
+    } catch (error) {
+      console.error('Error al guardar sesión:', error);
+      
+      // Guardar de todas formas (fallback)
+      setAuthToken(authResult.token);
+      setCurrentUser(authResult.user);
+    }
   };
 
   // Mostrar loader mientras se carga la sesión
@@ -657,7 +817,14 @@ export default function App() {
   return (
     <ThemeProvider defaultTheme="system" storageKey="conap-theme">
       <SidebarProvider defaultOpen={false}>
-        <AppContent currentUser={currentUser} setCurrentUser={setCurrentUser} />
+        <AppContent 
+          currentUser={currentUser} 
+          setCurrentUser={setCurrentUser}
+          patrullajeEnProgreso={patrullajeEnProgreso}
+          setPatrullajeEnProgreso={setPatrullajeEnProgreso}
+          coordenadasRecuperadas={coordenadasRecuperadas}
+          setCoordenadasRecuperadas={setCoordenadasRecuperadas}
+        />
       </SidebarProvider>
     </ThemeProvider>
   );

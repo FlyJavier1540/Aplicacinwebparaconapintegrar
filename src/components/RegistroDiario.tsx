@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback, memo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -7,11 +7,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Badge } from './ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Textarea } from './ui/textarea';
-import { Search, Clock, MapPin, Camera, AlertTriangle, Activity, CheckCircle, Play, Calendar, X, Plus, Trash2, MapPinned, FileText, Image as ImageIcon, Pause, StopCircle, Binoculars, Wrench, GraduationCap, Eye, Map, Search as SearchIcon, User } from 'lucide-react';
-import { actividades, guardarecursos } from '../data/mock-data';
+import { Search, Clock, MapPin, Camera, AlertTriangle, Activity, CheckCircle, Play, Calendar, X, Plus, Trash2, MapPinned, FileText, Image as ImageIcon, Pause, StopCircle, Binoculars, Wrench, GraduationCap, Eye, Map, Search as SearchIcon, User, Loader2 } from 'lucide-react';
+import { Hallazgo, EvidenciaFotografica, PuntoCoordenada, Guardarecurso } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { actividadesSync } from '../utils/actividadesSync';
-import { Hallazgo, EvidenciaFotografica, PuntoCoordenada } from '../types';
 import { buttonStyles, filterStyles, badgeStyles, cardStyles, layoutStyles, iconStyles, formStyles, textStyles, listCardStyles, imageStyles } from '../styles/shared-styles';
 import { 
   registroDiarioService, 
@@ -20,7 +19,13 @@ import {
   EvidenciaFormData, 
   PuntoCoordenadaFormData 
 } from '../utils/registroDiarioService';
-import { FormularioFotografia, FotografiaFormData } from './FormularioFotografia';
+import { fetchActividades } from '../utils/actividadesAPI';
+import { iniciarActividadAPI, finalizarActividadAPI, agregarCoordenadaAPI, eliminarCoordenadaAPI, agregarHallazgoAPI, eliminarHallazgoAPI } from '../utils/registroDiarioAPI';
+import { guardarecursosService } from '../utils/guardarecursosService';
+import { authService } from '../utils/authService';
+import { getGuatemalaDate, parseLocalDate } from '../utils/formatters';
+import { toast } from 'sonner@2.0.3';
+import { forceLogout } from '../utils/base-api-service';
 
 interface RegistroDiarioProps {
   userPermissions: {
@@ -30,15 +35,21 @@ interface RegistroDiarioProps {
     canDelete: boolean;
   };
   currentUser?: any;
+  patrullajeEnProgreso?: any;
+  coordenadasRecuperadas?: any[];
+  onPatrullajeResumido?: () => void;
 }
 
 // Interfaces movidas al servicio y reimportadas
 
-export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioProps) {
-  const [actividadesList, setActividadesList] = useState(actividades);
+export function RegistroDiario({ userPermissions, currentUser, patrullajeEnProgreso, coordenadasRecuperadas, onPatrullajeResumido }: RegistroDiarioProps) {
+  const [actividadesList, setActividadesList] = useState<any[]>([]);
+  const [guardarecursosList, setGuardarecursosList] = useState<Guardarecurso[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedGuardarecurso, setSelectedGuardarecurso] = useState<string>('todos');
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(getGuatemalaDate());
   
   // Modales
   const [isPatrullajeDialogOpen, setIsPatrullajeDialogOpen] = useState(false);
@@ -62,9 +73,6 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
     registroDiarioService.createEmptyHallazgoForm()
   );
 
-  const [isAgregarFotoHallazgoOpen, setIsAgregarFotoHallazgoOpen] = useState(false);
-  const [isAgregarFotoEvidenciaOpen, setIsAgregarFotoEvidenciaOpen] = useState(false);
-
   const [hallazgosTemporales, setHallazgosTemporales] = useState<Hallazgo[]>([]);
   const [evidenciasTemporales, setEvidenciasTemporales] = useState<EvidenciaFotografica[]>([]);
   const [coordenadasTemporales, setCoordenadasTemporales] = useState<PuntoCoordenada[]>([]);
@@ -85,29 +93,165 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
   const [latitudFin, setLatitudFin] = useState('');
   const [longitudFin, setLongitudFin] = useState('');
 
-  // Suscribirse a cambios en actividades
+  // Determinar si el usuario actual es un guardarecurso (necesario antes de los useEffects) - MEMOIZADO
+  const isGuardarecurso = useMemo(() => currentUser?.rol === 'Guardarecurso', [currentUser?.rol]);
+  const currentGuardarecursoId = useMemo(() => isGuardarecurso ? currentUser?.id : null, [isGuardarecurso, currentUser?.id]);
+
+  // Mantener fecha actualizada para TODOS los usuarios - verificar cada minuto
   useEffect(() => {
-    const unsubscribe = actividadesSync.subscribe((actividades) => {
-      setActividadesList(actividades);
-      // Actualizar actividad activa si existe
-      if (actividadActiva) {
-        const actividadActualizada = actividades.find(a => a.id === actividadActiva.id);
-        if (actividadActualizada) {
-          setActividadActiva(actividadActualizada);
+    const checkDate = () => {
+      const fechaActual = getGuatemalaDate();
+      setSelectedDate((prevDate) => {
+        if (prevDate !== fechaActual) {
+          console.log('📅 Fecha actualizada automáticamente de', prevDate, 'a', fechaActual);
+          return fechaActual;
         }
+        return prevDate;
+      });
+    };
+
+    // Verificar inmediatamente y luego cada minuto
+    checkDate();
+    const interval = setInterval(checkDate, 60000); // 60 segundos
+
+    return () => clearInterval(interval);
+  }, []); // Sin dependencias para que solo se ejecute al montar
+
+  // Cargar actividades desde el servidor - MEMOIZADO
+  // 🔒 SEGURIDAD: Si hay error, fuerza logout
+  const loadActividades = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const accessToken = authService.getCurrentToken();
+      if (!accessToken) {
+        console.error('❌ NO HAY TOKEN - FORZANDO LOGOUT');
+        forceLogout();
+        return;
       }
+
+      const actividadesFromServer = await fetchActividades(accessToken);
+      console.log('✅ Actividades cargadas para Registro Diario:', actividadesFromServer);
+      setActividadesList(actividadesFromServer);
+    } catch (error) {
+      console.error('❌ ERROR AL CARGAR ACTIVIDADES - FORZANDO LOGOUT:', error);
+      forceLogout();
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadActividades();
+  }, [loadActividades]);
+
+  // Cargar guardarecursos desde el servidor - MEMOIZADO
+  // 🔒 SEGURIDAD: Si hay error, fuerza logout
+  const loadGuardarecursos = useCallback(async () => {
+    try {
+      const accessToken = authService.getCurrentToken();
+      if (!accessToken) {
+        console.error('❌ NO HAY TOKEN - FORZANDO LOGOUT');
+        forceLogout();
+        return;
+      }
+
+      const guardarecursosFromServer = await guardarecursosService.fetchGuardarecursos(accessToken);
+      console.log('✅ Guardarecursos cargados:', guardarecursosFromServer);
+      setGuardarecursosList(guardarecursosFromServer);
+    } catch (error) {
+      console.error('❌ ERROR AL CARGAR GUARDARECURSOS - FORZANDO LOGOUT:', error);
+      forceLogout();
+    }
+  }, []);
+
+  useEffect(() => {
+    loadGuardarecursos();
+  }, [loadGuardarecursos]);
+
+  // Cargar hallazgos independientes del día actual - MEMOIZADO
+  // 🔒 SEGURIDAD: Si hay error, fuerza logout
+  const loadHallazgosIndependientes = useCallback(async () => {
+    try {
+      const accessToken = authService.getCurrentToken();
+      if (!accessToken) {
+        console.error('❌ NO HAY TOKEN - FORZANDO LOGOUT');
+        forceLogout();
+        return;
+      }
+
+      const { hallazgosService } = await import('../utils/hallazgosService');
+      const todosLosHallazgos = await hallazgosService.fetchHallazgos(accessToken);
+      
+      // Filtrar solo los hallazgos del día actual y sin actividad (independientes)
+      const hoy = getGuatemalaDate();
+      const hallazgosHoy = todosLosHallazgos.filter(h => {
+        const fechaHallazgo = h.fechaReporte;
+        // actividadId null/undefined significa que NO tiene actividad asociada = independiente
+        return fechaHallazgo === hoy && !h.actividadId;
+      });
+      
+      setHallazgosIndependientes(hallazgosHoy);
+      console.log('✅ Hallazgos independientes cargados:', hallazgosHoy.length, 'hallazgos');
+    } catch (err) {
+      console.error('❌ ERROR AL CARGAR HALLAZGOS - FORZANDO LOGOUT:', err);
+      forceLogout();
+    }
+  }, []);
+
+  useEffect(() => {
+    loadHallazgosIndependientes();
+  }, [loadHallazgosIndependientes]);
+
+  // Detectar patrullaje en progreso al montar el componente
+  useEffect(() => {
+    if (patrullajeEnProgreso && !isPatrullajeDialogOpen) {
+      console.log('🚨 Abriendo modal de patrullaje en progreso:', patrullajeEnProgreso);
+      console.log('📍 Coordenadas a cargar:', coordenadasRecuperadas);
+      
+      // Configurar el patrullaje como actividad activa
+      setActividadActiva(patrullajeEnProgreso);
+      
+      // Inicializar listas vacías excepto coordenadas que vienen de la BD
+      setHallazgosTemporales([]);
+      setEvidenciasTemporales([]);
+      setCoordenadasTemporales(coordenadasRecuperadas || []);
+      
+      // Abrir el modal de patrullaje
+      setIsPatrullajeDialogOpen(true);
+      
+      // Notificar que el patrullaje fue resumido
+      if (onPatrullajeResumido) {
+        onPatrullajeResumido();
+      }
+
+      toast.info('Patrullaje resumido', {
+        description: `Continuando con ${patrullajeEnProgreso.tipo}: ${patrullajeEnProgreso.descripcion}. ${coordenadasRecuperadas && coordenadasRecuperadas.length > 0 ? `${coordenadasRecuperadas.length} punto(s) de coordenadas recuperado(s).` : ''}`
+      });
+    }
+  }, [patrullajeEnProgreso, isPatrullajeDialogOpen, onPatrullajeResumido, coordenadasRecuperadas]);
+
+  // Tipos de actividad - MEMOIZADO
+  const tiposActividad = useMemo(() => registroDiarioService.getAllTiposActividad(), []);
+
+  // Guardarecursos ordenados alfabéticamente - MEMOIZADO
+  const guardarecursosOrdenados = useMemo(() => {
+    return [...guardarecursosList].sort((a, b) => {
+      const nombreA = `${a.nombre} ${a.apellido}`;
+      const nombreB = `${b.nombre} ${b.apellido}`;
+      return nombreA.localeCompare(nombreB, 'es');
     });
+  }, [guardarecursosList]);
 
-    return unsubscribe;
-  }, [actividadActiva]);
+  // Crear mapa de guardarecursos para búsqueda O(1) - OPTIMIZADO
+  const guardarecursosMap = useMemo(() => {
+    const map: Record<string, Guardarecurso> = {};
+    guardarecursosList.forEach(g => {
+      map[g.id] = g;
+    });
+    return map;
+  }, [guardarecursosList]);
 
-  // Determinar si el usuario actual es un guardarecurso
-  const isGuardarecurso = currentUser?.rol === 'Guardarecurso';
-  const currentGuardarecursoId = isGuardarecurso ? currentUser?.id : null;
-
-  const tiposActividad = registroDiarioService.getAllTiposActividad();
-
-  // Filtrado usando el servicio
+  // Filtrado usando el servicio - MEMOIZADO
   const actividadesFiltradas = useMemo(() => {
     return registroDiarioService.filterActividadesPorRol(
       actividadesList,
@@ -116,94 +260,162 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
       selectedGuardarecurso,
       isGuardarecurso,
       currentGuardarecursoId,
-      guardarecursos
+      guardarecursosList
     );
-  }, [actividadesList, selectedDate, searchTerm, selectedGuardarecurso, isGuardarecurso, currentGuardarecursoId]);
+  }, [actividadesList, selectedDate, searchTerm, selectedGuardarecurso, isGuardarecurso, currentGuardarecursoId, guardarecursosList]);
 
-  const handleIniciarActividad = (actividad: any) => {
+  // Handlers - MEMOIZADOS
+  const handleIniciarActividad = useCallback((actividad: any) => {
     // Abrir modal para capturar hora y coordenadas de inicio
     setHoraInicio(registroDiarioService.getCurrentTime());
     setLatitudInicio('');
     setLongitudInicio('');
     setActividadPorIniciar(actividad);
     setIsIniciarActividadDialogOpen(true);
-  };
+  }, []);
 
-  const handleConfirmarInicioActividad = () => {
+  const handleConfirmarInicioActividad = useCallback(async () => {
     if (!actividadPorIniciar) return;
     
-    // Crear datos de inicio usando el servicio
-    const inicioData = registroDiarioService.createInicioActividadData(
-      horaInicio,
-      latitudInicio,
-      longitudInicio
-    );
-    
-    // Actualizar estado a "En Progreso" con datos del formulario
-    actividadesSync.updateActividad(actividadPorIniciar.id, inicioData);
+    try {
+      const accessToken = authService.getCurrentToken();
+      if (!accessToken) {
+        alert('No hay sesión activa');
+        return;
+      }
 
-    // Si es patrullaje, abrir modal especial que no se puede cerrar
-    if (registroDiarioService.isPatrullaje(actividadPorIniciar.tipo)) {
-      const actividadActualizada = { 
-        ...actividadPorIniciar, 
-        ...inicioData
+      // Crear coordenadas de inicio
+      const coordenadasInicio = {
+        lat: parseFloat(latitudInicio) || 0,
+        lng: parseFloat(longitudInicio) || 0
       };
-      setActividadActiva(actividadActualizada);
-      setHallazgosTemporales([]);
-      setEvidenciasTemporales([]);
-      setCoordenadasTemporales([]);
-      // Resetear formulario de hallazgos usando el servicio
-      setHallazgoForm(registroDiarioService.createEmptyHallazgoForm());
-      setIsPatrullajeDialogOpen(true);
+
+      // Llamar a la API para iniciar la actividad
+      const actividadActualizada = await iniciarActividadAPI(
+        actividadPorIniciar.id,
+        horaInicio,
+        coordenadasInicio,
+        accessToken
+      );
+
+      console.log('✅ Actividad iniciada:', actividadActualizada);
+
+      // Actualizar la lista local
+      setActividadesList(prev =>
+        prev.map(act => act.id === actividadPorIniciar.id ? actividadActualizada : act)
+      );
+
+      // Si es patrullaje, abrir modal especial que no se puede cerrar
+      if (registroDiarioService.isPatrullaje(actividadPorIniciar.tipo)) {
+        setActividadActiva(actividadActualizada);
+        setHallazgosTemporales([]);
+        setEvidenciasTemporales([]);
+        setCoordenadasTemporales([]);
+        // Resetear formulario de hallazgos usando el servicio
+        setHallazgoForm(registroDiarioService.createEmptyHallazgoForm());
+        setIsPatrullajeDialogOpen(true);
+      }
+
+      // Cerrar modal de inicio
+      setIsIniciarActividadDialogOpen(false);
+      setActividadPorIniciar(null);
+    } catch (error) {
+      console.error('❌ ERROR AL INICIAR ACTIVIDAD - FORZANDO LOGOUT:', error);
+      forceLogout();
     }
+  }, [actividadPorIniciar, horaInicio, latitudInicio, longitudInicio]);
 
-    // Cerrar modal de inicio
-    setIsIniciarActividadDialogOpen(false);
-    setActividadPorIniciar(null);
-  };
-
-  const handleCompletarActividad = (actividad: any) => {
+  const handleCompletarActividad = useCallback((actividad: any) => {
     setSelectedActividad(actividad);
     setHallazgosTemporales(actividad.hallazgos || []);
     setEvidenciasTemporales(actividad.evidencias || []);
     setCoordenadasTemporales(actividad.puntosRecorrido || []);
     
-    // Si es patrullaje, pedir coordenadas finales primero
-    if (registroDiarioService.isPatrullaje(actividad.tipo)) {
-      // Prellenar hora de fin con hora actual usando el servicio
-      setHoraFin(registroDiarioService.getCurrentTime());
-      setLatitudFin('');
-      setLongitudFin('');
-      
-      setIsCompletarDialogOpen(true);
-    } else {
-      // Para otras actividades, ir directo al formulario completo
-      setActividadActiva(actividad);
-      setIsPatrullajeDialogOpen(true);
-    }
-  };
+    // Para todas las actividades (patrullaje y no patrullaje), pedir coordenadas finales primero
+    setHoraFin(registroDiarioService.getCurrentTime());
+    setLatitudFin('');
+    setLongitudFin('');
+    
+    setIsCompletarDialogOpen(true);
+  }, []);
 
-  const handlePasarAFormularioCompleto = () => {
+  const handlePasarAFormularioCompleto = useCallback(async () => {
     if (selectedActividad && horaFin && latitudFin && longitudFin) {
-      // Actualizar actividad con coordenadas y hora de fin
-      actividadesSync.updateActividad(selectedActividad.id, {
-        estado: 'En Progreso', // Temporalmente en progreso hasta completar el formulario completo
-        horaFin: horaFin,
-        coordenadasFin: {
-          lat: parseFloat(latitudFin),
-          lng: parseFloat(longitudFin)
+      // Si NO es patrullaje, completar directamente
+      if (!registroDiarioService.isPatrullaje(selectedActividad.tipo)) {
+        try {
+          const accessToken = authService.getCurrentToken();
+          if (!accessToken) {
+            toast.error('Error', { description: 'No hay sesión activa' });
+            return;
+          }
+
+          // Crear coordenadas de fin
+          const coordenadasFin = {
+            lat: parseFloat(latitudFin) || 0,
+            lng: parseFloat(longitudFin) || 0
+          };
+
+          // Llamar a la API para finalizar la actividad
+          const actividadActualizada = await finalizarActividadAPI(
+            selectedActividad.id,
+            horaFin,
+            coordenadasFin,
+            '', // observaciones
+            accessToken,
+            hallazgosTemporales,
+            evidenciasTemporales,
+            coordenadasTemporales
+          );
+
+          console.log('✅ Actividad no-patrullaje finalizada exitosamente:', actividadActualizada);
+
+          // Actualizar la lista local
+          setActividadesList(prev =>
+            prev.map(act => act.id === selectedActividad.id ? actividadActualizada : act)
+          );
+
+          // Limpiar todo y cerrar
+          setIsCompletarDialogOpen(false);
+          setSelectedActividad(null);
+          setHallazgosTemporales([]);
+          setEvidenciasTemporales([]);
+          setCoordenadasTemporales([]);
+          setHoraFin('');
+          setLatitudFin('');
+          setLongitudFin('');
+
+          toast.success('Actividad completada', {
+            description: 'La actividad se ha finalizado correctamente'
+          });
+        } catch (error) {
+          console.error('❌ Error al finalizar actividad:', error);
+          const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+          toast.error('Error al finalizar', {
+            description: errorMessage || 'Por favor intente nuevamente'
+          });
         }
-      });
+      } else {
+        // Si es patrullaje, continuar al modal completo
+        actividadesSync.updateActividad(selectedActividad.id, {
+          estado: 'En Progreso',
+          horaFin: horaFin,
+          coordenadasFin: {
+            lat: parseFloat(latitudFin),
+            lng: parseFloat(longitudFin)
+          }
+        });
 
-      // Cerrar modal de coordenadas y abrir modal completo
-      setIsCompletarDialogOpen(false);
-      setIsFinalizandoDesdeModal(false);
-      setActividadActiva(selectedActividad);
-      setIsPatrullajeDialogOpen(true);
+        // Cerrar modal de coordenadas y abrir modal completo
+        setIsCompletarDialogOpen(false);
+        setIsFinalizandoDesdeModal(false);
+        setActividadActiva(selectedActividad);
+        setIsPatrullajeDialogOpen(true);
+      }
     }
-  };
+  }, [selectedActividad, horaFin, latitudFin, longitudFin, hallazgosTemporales, evidenciasTemporales, coordenadasTemporales]);
 
-  const handleCompletarPatrullaje = () => {
+  const handleCompletarPatrullaje = useCallback(() => {
     // Cerrar modal actual y abrir modal de coordenadas finales para TODAS las actividades
     setIsPatrullajeDialogOpen(false);
     setSelectedActividad(actividadActiva);
@@ -215,87 +427,272 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
     setLongitudFin('');
     
     setIsCompletarDialogOpen(true);
-  };
+  }, [actividadActiva]);
 
-  const handleFinalizarConCoordenadas = () => {
+  const handleFinalizarConCoordenadas = useCallback(async () => {
     if (selectedActividad && horaFin && latitudFin && longitudFin) {
-      // Crear datos de finalización usando el servicio
-      const finalizacionData = registroDiarioService.createFinalizacionActividadData(
-        horaFin,
-        latitudFin,
-        longitudFin,
-        '',
-        hallazgosTemporales,
-        evidenciasTemporales,
-        coordenadasTemporales
-      );
-      
-      actividadesSync.updateActividad(selectedActividad.id, finalizacionData);
+      try {
+        console.log('🚀 Iniciando finalización de actividad...');
+        console.log('📋 Datos:', {
+          actividadId: selectedActividad.id,
+          horaFin,
+          coordenadasFin: { lat: parseFloat(latitudFin), lng: parseFloat(longitudFin) },
+          hallazgos: hallazgosTemporales.length,
+          evidencias: evidenciasTemporales.length,
+          coordenadas: coordenadasTemporales.length
+        });
 
-      // Limpiar todo y cerrar
-      setIsCompletarDialogOpen(false);
-      setIsFinalizandoDesdeModal(false);
-      setActividadActiva(null);
-      setSelectedActividad(null);
-      setHallazgosTemporales([]);
-      setEvidenciasTemporales([]);
-      setCoordenadasTemporales([]);
-      setHoraFin('');
-      setLatitudFin('');
-      setLongitudFin('');
+        const accessToken = authService.getCurrentToken();
+        if (!accessToken) {
+          toast.error('Error', { description: 'No hay sesión activa' });
+          return;
+        }
+
+        // Crear coordenadas de fin
+        const coordenadasFin = {
+          lat: parseFloat(latitudFin) || 0,
+          lng: parseFloat(longitudFin) || 0
+        };
+
+        // Llamar a la API para finalizar la actividad
+        const actividadActualizada = await finalizarActividadAPI(
+          selectedActividad.id,
+          horaFin,
+          coordenadasFin,
+          '', // observaciones
+          accessToken,
+          hallazgosTemporales,
+          evidenciasTemporales,
+          coordenadasTemporales
+        );
+
+        console.log('✅ Actividad finalizada exitosamente:', actividadActualizada);
+
+        // Actualizar la lista local
+        setActividadesList(prev =>
+          prev.map(act => act.id === selectedActividad.id ? actividadActualizada : act)
+        );
+
+        // Limpiar todo y cerrar
+        setIsCompletarDialogOpen(false);
+        setIsFinalizandoDesdeModal(false);
+        setActividadActiva(null);
+        setSelectedActividad(null);
+        setHallazgosTemporales([]);
+        setEvidenciasTemporales([]);
+        setCoordenadasTemporales([]);
+        setHoraFin('');
+        setLatitudFin('');
+        setLongitudFin('');
+
+        toast.success('Actividad completada', {
+          description: 'La actividad se ha finalizado correctamente'
+        });
+      } catch (error) {
+        console.error('❌ Error al finalizar actividad:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+        console.error('Mensaje de error:', errorMessage);
+        toast.error('Error al finalizar', {
+          description: errorMessage || 'Por favor intente nuevamente'
+        });
+      }
     }
-  };
+  }, [selectedActividad, horaFin, latitudFin, longitudFin, hallazgosTemporales, evidenciasTemporales, coordenadasTemporales]);
 
-  const handleAgregarHallazgo = () => {
+  const handleAgregarHallazgo = useCallback(async () => {
     if (!registroDiarioService.isHallazgoFormValid(hallazgoForm)) return;
-
-    // Crear hallazgo usando el servicio
-    const nuevoHallazgo = registroDiarioService.createHallazgo(
-      hallazgoForm,
-      actividadActiva?.ubicacion || selectedActividad?.ubicacion || '',
-      currentUser?.id || ''
-    );
-
-    setHallazgosTemporales([...hallazgosTemporales, nuevoHallazgo]);
     
-    // Limpiar formulario usando el servicio
-    setHallazgoForm(registroDiarioService.createEmptyHallazgoForm());
-    setIsAddHallazgoOpen(false);
-  };
+    if (!actividadActiva) {
+      toast.error('Error', { description: 'No hay actividad activa' });
+      return;
+    }
 
-  const handleReportarHallazgoIndependiente = () => {
+    try {
+      setIsSaving(true);
+      const accessToken = authService.getCurrentToken();
+      
+      if (!accessToken) {
+        toast.error('Error', { description: 'No hay sesión activa' });
+        return;
+      }
+
+      // Guardar hallazgo en la base de datos
+      const hallazgoGuardado = await agregarHallazgoAPI(
+        actividadActiva.id,
+        {
+          titulo: hallazgoForm.titulo,
+          descripcion: hallazgoForm.descripcion,
+          gravedad: hallazgoForm.gravedad,
+          latitud: hallazgoForm.latitud,
+          longitud: hallazgoForm.longitud
+        },
+        accessToken
+      );
+
+      // Crear hallazgo para visualización usando el servicio
+      const nuevoHallazgo = {
+        ...registroDiarioService.createHallazgo(
+          hallazgoForm,
+          actividadActiva?.ubicacion || '',
+          currentUser?.id || ''
+        ),
+        id: hallazgoGuardado.id  // Usar el ID de la base de datos
+      };
+
+      setHallazgosTemporales([...hallazgosTemporales, nuevoHallazgo]);
+      
+      toast.success('Hallazgo guardado', {
+        description: 'El hallazgo se ha guardado correctamente en la base de datos'
+      });
+      
+      // Limpiar formulario usando el servicio
+      setHallazgoForm(registroDiarioService.createEmptyHallazgoForm());
+      setIsAddHallazgoOpen(false);
+    } catch (error) {
+      console.error('Error al agregar hallazgo:', error);
+      toast.error('Error', {
+        description: error instanceof Error ? error.message : 'Error al guardar hallazgo'
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [actividadActiva, hallazgoForm, hallazgosTemporales, currentUser?.id]);
+
+  const handleReportarHallazgoIndependiente = useCallback(async () => {
     if (!registroDiarioService.isHallazgoFormValid(hallazgoForm)) return;
 
-    // Crear hallazgo independiente usando el servicio
-    const nuevoHallazgo = registroDiarioService.createHallazgoIndependiente(
-      hallazgoForm,
-      currentUser?.id || ''
-    );
+    try {
+      setIsSaving(true);
+      const token = authService.getCurrentToken();
+      
+      if (!token) {
+        toast.error('Error', { description: 'No hay sesión activa' });
+        return;
+      }
 
-    setHallazgosIndependientes([...hallazgosIndependientes, nuevoHallazgo]);
-    setHallazgoForm(registroDiarioService.createEmptyHallazgoForm());
-    setIsReportarHallazgoIndependienteOpen(false);
-  };
+      // Crear hallazgo en la base de datos usando la API de hallazgosService
+      const hallazgoData = {
+        titulo: hallazgoForm.titulo,
+        descripcion: hallazgoForm.descripcion,
+        prioridad: hallazgoForm.gravedad,
+        ubicacion: '',
+        coordenadas: {
+          lat: parseFloat(hallazgoForm.latitud) || 0,
+          lng: parseFloat(hallazgoForm.longitud) || 0
+        },
+        areaProtegida: currentUser?.areaProtegida || '',
+        observaciones: ''
+      };
 
-  const handleAgregarCoordenada = () => {
+      const { hallazgosService } = await import('../utils/hallazgosService');
+      const nuevoHallazgo = await hallazgosService.createHallazgoAPI(token, hallazgoData);
+
+      // Agregar a la lista local
+      setHallazgosIndependientes([...hallazgosIndependientes, nuevoHallazgo]);
+      
+      toast.success('Hallazgo reportado', {
+        description: 'El hallazgo se ha guardado correctamente en la base de datos'
+      });
+      
+      setHallazgoForm(registroDiarioService.createEmptyHallazgoForm());
+      setIsReportarHallazgoIndependienteOpen(false);
+    } catch (err) {
+      console.error('Error al reportar hallazgo:', err);
+      toast.error('Error', {
+        description: err instanceof Error ? err.message : 'Error al reportar hallazgo'
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [hallazgoForm, hallazgosIndependientes, currentUser?.areaProtegida]);
+
+  const handleAgregarCoordenada = useCallback(async () => {
     if (!registroDiarioService.isCoordenadaFormValid(coordenadaForm)) return;
-
-    // Crear coordenada usando el servicio
-    const nuevaCoordenada = registroDiarioService.createPuntoCoordenada(coordenadaForm);
-
-    setCoordenadasTemporales([...coordenadasTemporales, nuevaCoordenada]);
     
-    // Limpiar formulario usando el servicio
-    setCoordenadaForm(registroDiarioService.createEmptyCoordenadaForm());
-    setIsAddCoordenadaOpen(false);
-  };
+    if (!actividadActiva) {
+      toast.error('Error', { description: 'No hay actividad activa' });
+      return;
+    }
 
-  const handleEliminarCoordenada = (id: string) => {
-    setCoordenadasTemporales(coordenadasTemporales.filter(coord => coord.id !== id));
-  };
+    try {
+      setIsSaving(true);
+      const accessToken = authService.getCurrentToken();
+      
+      if (!accessToken) {
+        toast.error('Error', { description: 'No hay sesión activa' });
+        return;
+      }
 
-  // Handler para agregar fotografía al hallazgo
-  const handleSubmitFotoHallazgo = (data: FotografiaFormData) => {
+      // Guardar coordenada en la base de datos
+      const coordenadaGuardada = await agregarCoordenadaAPI(
+        actividadActiva.id,
+        {
+          latitud: coordenadaForm.latitud,
+          longitud: coordenadaForm.longitud,
+          fecha: coordenadaForm.fecha,
+          hora: coordenadaForm.hora,
+          descripcion: coordenadaForm.descripcion
+        },
+        accessToken
+      );
+
+      // Agregar a la lista temporal para visualización
+      const nuevaCoordenada = {
+        id: coordenadaGuardada.id,
+        latitud: coordenadaGuardada.latitud,
+        longitud: coordenadaGuardada.longitud,
+        fecha: coordenadaGuardada.fecha,
+        hora: coordenadaGuardada.hora,
+        descripcion: coordenadaGuardada.descripcion || ''
+      };
+
+      setCoordenadasTemporales([...coordenadasTemporales, nuevaCoordenada]);
+      
+      toast.success('Coordenada guardada', {
+        description: 'El punto se ha guardado correctamente en la base de datos'
+      });
+      
+      // Limpiar formulario usando el servicio
+      setCoordenadaForm(registroDiarioService.createEmptyCoordenadaForm());
+      setIsAddCoordenadaOpen(false);
+    } catch (error) {
+      console.error('Error al agregar coordenada:', error);
+      toast.error('Error', {
+        description: error instanceof Error ? error.message : 'Error al guardar coordenada'
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [actividadActiva, coordenadaForm, coordenadasTemporales]);
+
+  const handleEliminarCoordenada = useCallback(async (id: string) => {
+    if (!actividadActiva) return;
+
+    try {
+      const accessToken = authService.getCurrentToken();
+      
+      if (!accessToken) {
+        toast.error('Error', { description: 'No hay sesión activa' });
+        return;
+      }
+
+      // Eliminar de la base de datos
+      await eliminarCoordenadaAPI(actividadActiva.id, id, accessToken);
+
+      // Actualizar lista temporal
+      setCoordenadasTemporales(coordenadasTemporales.filter(coord => coord.id !== id));
+      
+      toast.success('Coordenada eliminada');
+    } catch (error) {
+      console.error('Error al eliminar coordenada:', error);
+      toast.error('Error', {
+        description: error instanceof Error ? error.message : 'Error al eliminar coordenada'
+      });
+    }
+  }, [actividadActiva, coordenadasTemporales]);
+
+  // Handler para agregar fotografía al hallazgo - MEMOIZADO
+  const handleSubmitFotoHallazgo = useCallback((data: FotografiaFormData) => {
     const fotoData: FotoHallazgoFormData = {
       url: data.url,
       descripcion: data.descripcion,
@@ -307,18 +704,18 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
       ...hallazgoForm,
       fotografias: [...hallazgoForm.fotografias, fotoData]
     });
-  };
+  }, [hallazgoForm]);
 
-  // Handler para eliminar fotografía del hallazgo
-  const handleEliminarFotoHallazgo = (index: number) => {
+  // Handler para eliminar fotografía del hallazgo - MEMOIZADO
+  const handleEliminarFotoHallazgo = useCallback((index: number) => {
     setHallazgoForm({
       ...hallazgoForm,
       fotografias: hallazgoForm.fotografias.filter((_, i) => i !== index)
     });
-  };
+  }, [hallazgoForm]);
 
-  // Handler para agregar evidencia fotográfica general
-  const handleSubmitFotoEvidencia = (data: FotografiaFormData) => {
+  // Handler para agregar evidencia fotográfica general - MEMOIZADO
+  const handleSubmitFotoEvidencia = useCallback((data: FotografiaFormData) => {
     const nuevaEvidencia = registroDiarioService.createEvidencia({
       url: data.url,
       descripcion: data.descripcion,
@@ -328,18 +725,40 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
     });
 
     setEvidenciasTemporales([...evidenciasTemporales, nuevaEvidencia]);
-  };
+  }, [evidenciasTemporales]);
 
-  const handleEliminarHallazgo = (id: string) => {
-    setHallazgosTemporales(hallazgosTemporales.filter(h => h.id !== id));
-  };
+  const handleEliminarHallazgo = useCallback(async (id: string) => {
+    if (!actividadActiva) return;
 
-  const handleEliminarEvidencia = (id: string) => {
+    try {
+      const accessToken = authService.getCurrentToken();
+      
+      if (!accessToken) {
+        toast.error('Error', { description: 'No hay sesión activa' });
+        return;
+      }
+
+      // Eliminar de la base de datos
+      await eliminarHallazgoAPI(actividadActiva.id, id, accessToken);
+
+      // Actualizar lista temporal
+      setHallazgosTemporales(hallazgosTemporales.filter(h => h.id !== id));
+      
+      toast.success('Hallazgo eliminado');
+    } catch (error) {
+      console.error('Error al eliminar hallazgo:', error);
+      toast.error('Error', {
+        description: error instanceof Error ? error.message : 'Error al eliminar hallazgo'
+      });
+    }
+  }, [actividadActiva, hallazgosTemporales]);
+
+  const handleEliminarEvidencia = useCallback((id: string) => {
     setEvidenciasTemporales(evidenciasTemporales.filter(e => e.id !== id));
-  };
+  }, [evidenciasTemporales]);
 
-  // Usar funciones del servicio para estilos
-  const getEstadoInfo = (estado: 'Programada' | 'En Progreso' | 'Completada') => {
+  // Usar funciones del servicio para estilos - MEMOIZADAS
+  const getEstadoInfo = useCallback((estado: 'Programada' | 'En Progreso' | 'Completada') => {
     const info = registroDiarioService.getEstadoInfo(estado);
     const iconMap: Record<string, any> = {
       'Clock': Clock,
@@ -351,13 +770,13 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
       icon: iconMap[info.icon] || AlertTriangle,
       badge: info.badge
     };
-  };
+  }, []);
 
-  const getTipoColor = (tipo: string) => {
+  const getTipoColor = useCallback((tipo: string) => {
     return registroDiarioService.getTipoColor(tipo);
-  };
+  }, []);
 
-  const getTipoIcon = (tipo: string) => {
+  const getTipoIcon = useCallback((tipo: string) => {
     const iconName = registroDiarioService.getTipoIcon(tipo);
     const iconMap: Record<string, any> = {
       'Binoculars': Binoculars,
@@ -369,7 +788,7 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
       'Activity': Activity
     };
     return iconMap[iconName] || Activity;
-  };
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -399,7 +818,7 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="todos">Todos</SelectItem>
-                  {guardarecursos.map(g => (
+                  {guardarecursosOrdenados.map(g => (
                     <SelectItem key={g.id} value={g.id}>
                       {g.nombre} {g.apellido}
                     </SelectItem>
@@ -422,84 +841,39 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
         
         {/* Botón de acción rápida */}
         {userPermissions.canCreate && (
-          <Button
-            onClick={() => setIsReportarHallazgoIndependienteOpen(true)}
-            className="!h-11 px-4 bg-orange-600 hover:bg-orange-700 text-white dark:bg-orange-600 dark:hover:bg-orange-700"
-          >
-            <AlertTriangle className="h-4 w-4 mr-2" />
-            <span className="hidden sm:inline">Hallazgo</span>
-            <span className="sm:hidden">Nuevo</span>
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={() => setIsReportarHallazgoIndependienteOpen(true)}
+              className="!h-11 px-4 bg-orange-600 hover:bg-orange-700 text-white dark:bg-orange-600 dark:hover:bg-orange-700"
+            >
+              <AlertTriangle className="h-4 w-4 mr-2" />
+              <span className="hidden sm:inline">Hallazgo</span>
+              <span className="sm:hidden">Nuevo</span>
+            </Button>
+            {hallazgosIndependientes.length > 0 && (
+              <Badge variant="outline" className="!h-7 px-2.5 bg-orange-50 text-orange-700 border-orange-300 dark:bg-orange-950/30 dark:text-orange-300 dark:border-orange-700">
+                {hallazgosIndependientes.length} {hallazgosIndependientes.length === 1 ? 'reportado hoy' : 'reportados hoy'}
+              </Badge>
+            )}
+          </div>
         )}
       </div>
 
-      {/* Hallazgos Independientes */}
-      {hallazgosIndependientes.length > 0 && (
-        <div className="mb-6">
-          <Card className="border-0 shadow-md bg-gradient-to-br from-orange-50 to-red-50 dark:from-orange-950/20 dark:to-red-950/20">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-orange-600 dark:text-orange-400" />
-                Hallazgos Reportados Hoy ({hallazgosIndependientes.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
-                {hallazgosIndependientes.map((hallazgo) => (
-                  <motion.div
-                    key={hallazgo.id}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    className="p-3 bg-white dark:bg-gray-800 border border-orange-200 dark:border-orange-800 rounded-lg"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <Badge variant="outline" className={`text-xs ${
-                            hallazgo.gravedad === 'Crítica' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300' :
-                            hallazgo.gravedad === 'Alta' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300' :
-                            hallazgo.gravedad === 'Media' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300' :
-                            'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
-                          }`}>
-                            {hallazgo.gravedad}
-                          </Badge>
-                          <span className="text-xs text-muted-foreground">
-                            {new Date(hallazgo.fecha).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                        <p className="font-medium text-sm">{hallazgo.titulo}</p>
-                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{hallazgo.descripcion}</p>
-                        {hallazgo.evidencias && hallazgo.evidencias.length > 0 && (
-                          <div className="flex items-center gap-1 mt-2">
-                            <Camera className="h-3 w-3 text-blue-600" />
-                            <span className="text-xs text-muted-foreground">
-                              {hallazgo.evidencias.length} {hallazgo.evidencias.length === 1 ? 'fotografía' : 'fotografías'}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                      <Button
-                        onClick={() => {
-                          setHallazgosIndependientes(hallazgosIndependientes.filter(h => h.id !== hallazgo.id));
-                        }}
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 w-8 p-0"
-                      >
-                        <Trash2 className="h-4 w-4 text-red-600" />
-                      </Button>
-                    </div>
-                  </motion.div>
-                ))}
+      {/* Actividades */}
+      <div>
+        {isLoading ? (
+          <Card className="border-0 shadow-lg">
+            <CardContent className="p-8 sm:p-12">
+              <div className="text-center">
+                <div className="animate-spin h-12 w-12 sm:h-16 sm:w-16 mx-auto mb-3 sm:mb-4 border-4 border-primary border-t-transparent rounded-full" />
+                <h3 className="mb-2 text-sm sm:text-base">Cargando actividades...</h3>
+                <p className="text-xs sm:text-sm text-muted-foreground">
+                  Por favor espere un momento
+                </p>
               </div>
             </CardContent>
           </Card>
-        </div>
-      )}
-
-      {/* Actividades */}
-      <div>
-        {actividadesFiltradas.length === 0 ? (
+        ) : actividadesFiltradas.length === 0 ? (
             <Card className="border-0 shadow-lg">
               <CardContent className="p-8 sm:p-12">
                 <div className="text-center">
@@ -524,7 +898,7 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
           ) : (
             <div className={layoutStyles.cardGrid}>
               {actividadesFiltradas.map((actividad, index) => {
-                const guardarecurso = guardarecursos.find(g => g.id === actividad.guardarecurso);
+                const guardarecurso = guardarecursosList.find(g => g.id === actividad.guardarecurso);
                 const tipoColor = getTipoColor(actividad.tipo);
                 const estadoInfo = getEstadoInfo(actividad.estado);
                 const EstadoIcon = estadoInfo.icon;
@@ -862,13 +1236,13 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
                             <div className="flex items-center gap-2 mb-1">
                               <MapPin className="h-4 w-4 text-green-600 dark:text-green-400 flex-shrink-0" />
                               <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                                {coord.latitud.toFixed(6)}, {coord.longitud.toFixed(6)}
+                                {parseFloat(coord.latitud).toFixed(6)}, {parseFloat(coord.longitud).toFixed(6)}
                               </span>
                             </div>
                             <div className="flex items-center gap-3 text-xs text-gray-600 dark:text-gray-400">
                               <span className="flex items-center gap-1">
                                 <Calendar className="h-3 w-3" />
-                                {new Date(coord.fecha).toLocaleDateString('es-GT')}
+                                {parseLocalDate(coord.fecha).toLocaleDateString('es-GT')}
                               </span>
                               <span className="flex items-center gap-1">
                                 <Clock className="h-3 w-3" />
@@ -941,7 +1315,10 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
               className={formStyles.submitButton}
             >
               <CheckCircle className="h-4 w-4 mr-2" />
-              {isFinalizandoDesdeModal ? 'Finalizar Patrullaje' : 'Continuar'}
+              {isFinalizandoDesdeModal 
+                ? 'Finalizar Patrullaje' 
+                : (selectedActividad && registroDiarioService.isPatrullaje(selectedActividad.tipo) ? 'Continuar' : 'Guardar')
+              }
             </Button>
           </div>
         </DialogContent>
@@ -1002,13 +1379,13 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
                             <div className="flex items-center gap-2 mb-1">
                               <MapPin className="h-4 w-4 text-green-600 dark:text-green-400 flex-shrink-0" />
                               <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                                {coord.latitud.toFixed(6)}, {coord.longitud.toFixed(6)}
+                                {parseFloat(coord.latitud).toFixed(6)}, {parseFloat(coord.longitud).toFixed(6)}
                               </span>
                             </div>
                             <div className="flex items-center gap-3 text-xs text-gray-600 dark:text-gray-400">
                               <span className="flex items-center gap-1">
                                 <Calendar className="h-3 w-3" />
-                                {new Date(coord.fecha).toLocaleDateString('es-GT')}
+                                {parseLocalDate(coord.fecha).toLocaleDateString('es-GT')}
                               </span>
                               <span className="flex items-center gap-1">
                                 <Clock className="h-3 w-3" />
@@ -1043,292 +1420,6 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
                 </div>
               </div>
             )}
-
-            {/* Hallazgos Reportados */}
-            <div className={formStyles.section}>
-              <h3 className={formStyles.sectionTitle}>
-                Hallazgos Reportados ({hallazgosTemporales.length})
-              </h3>
-
-              {hallazgosTemporales.length === 0 ? (
-                <div className="text-center py-8 bg-gray-50 dark:bg-gray-800/30 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
-                  <AlertTriangle className="h-12 w-12 mx-auto mb-2 text-gray-300 dark:text-gray-600" />
-                  <p className={textStyles.muted}>No se han reportado hallazgos</p>
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Agregue hallazgos usando el formulario abajo</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {hallazgosTemporales.map((hallazgo) => (
-                    <div key={hallazgo.id} className="p-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Badge variant="outline" className={`${badgeStyles.base} ${
-                              hallazgo.gravedad === 'Crítica' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-300 dark:border-red-700' :
-                              hallazgo.gravedad === 'Alta' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 border-orange-300 dark:border-orange-700' :
-                              hallazgo.gravedad === 'Media' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-300 dark:border-yellow-700' :
-                              'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-300 dark:border-blue-700'
-                            }`}>
-                              {hallazgo.gravedad}
-                            </Badge>
-                          </div>
-                          <p className="font-medium text-gray-900 dark:text-gray-100">{hallazgo.titulo}</p>
-                          <p className={`${textStyles.muted} mt-1`}>{hallazgo.descripcion}</p>
-                          {hallazgo.evidencias && hallazgo.evidencias.length > 0 && (
-                            <div className="grid grid-cols-4 gap-2 mt-3">
-                              {hallazgo.evidencias.map((evidencia, idx) => (
-                                <div key={idx} className="aspect-square bg-gray-100 dark:bg-gray-800 rounded overflow-hidden border border-gray-200 dark:border-gray-700">
-                                  <img src={evidencia.url} alt="" className="w-full h-full object-cover" />
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <Button
-                          onClick={() => handleEliminarHallazgo(hallazgo.id)}
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Botón para mostrar/ocultar formulario de hallazgo */}
-            <Button
-              type="button"
-              onClick={() => setIsFormularioHallazgoAbierto(!isFormularioHallazgoAbierto)}
-              className="w-full bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white border-0 h-10"
-              variant="outline"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Reportar Nuevo Hallazgo
-            </Button>
-
-            {/* Formulario de Hallazgo Integrado (colapsable) */}
-            <AnimatePresence>
-              {isFormularioHallazgoAbierto && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="overflow-hidden"
-                >
-                  <div className={formStyles.section}>
-                    <div className="flex items-center justify-between">
-                      <h3 className={formStyles.sectionTitle}>Información del Hallazgo</h3>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setIsFormularioHallazgoAbierto(false)}
-                        className="h-8 w-8"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    <div className={formStyles.grid}>
-                      <div className={formStyles.field}>
-                        <Label htmlFor="hallazgo-gravedad" className={formStyles.label}>Gravedad</Label>
-                        <Select value={hallazgoForm.gravedad} onValueChange={(value: any) => setHallazgoForm({...hallazgoForm, gravedad: value})}>
-                          <SelectTrigger className={formStyles.selectTrigger}>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Baja">Baja</SelectItem>
-                            <SelectItem value="Media">Media</SelectItem>
-                            <SelectItem value="Alta">Alta</SelectItem>
-                            <SelectItem value="Crítica">Crítica</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className={formStyles.fieldFullWidth}>
-                        <Label htmlFor="hallazgo-titulo" className={formStyles.label}>Título</Label>
-                        <Input
-                          id="hallazgo-titulo"
-                          value={hallazgoForm.titulo}
-                          onChange={(e) => setHallazgoForm({...hallazgoForm, titulo: e.target.value})}
-                          placeholder="Título breve del hallazgo"
-                          className={formStyles.input}
-                        />
-                      </div>
-
-                      <div className={formStyles.fieldFullWidth}>
-                        <Label htmlFor="hallazgo-descripcion" className={formStyles.label}>Descripción</Label>
-                        <Textarea
-                          id="hallazgo-descripcion"
-                          value={hallazgoForm.descripcion}
-                          onChange={(e) => setHallazgoForm({...hallazgoForm, descripcion: e.target.value})}
-                          placeholder="Describa detalladamente el hallazgo..."
-                          rows={3}
-                          className="resize-none"
-                        />
-                      </div>
-
-                      <div className={formStyles.field}>
-                        <Label htmlFor="hallazgo-lat" className={formStyles.label}>Latitud (opcional)</Label>
-                        <Input
-                          id="hallazgo-lat"
-                          type="number"
-                          step="0.000001"
-                          value={hallazgoForm.latitud}
-                          onChange={(e) => setHallazgoForm({...hallazgoForm, latitud: e.target.value})}
-                          placeholder="14.6349"
-                          className={formStyles.input}
-                        />
-                      </div>
-
-                      <div className={formStyles.field}>
-                        <Label htmlFor="hallazgo-lng" className={formStyles.label}>Longitud (opcional)</Label>
-                        <Input
-                          id="hallazgo-lng"
-                          type="number"
-                          step="0.000001"
-                          value={hallazgoForm.longitud}
-                          onChange={(e) => setHallazgoForm({...hallazgoForm, longitud: e.target.value})}
-                          placeholder="-90.5069"
-                          className={formStyles.input}
-                        />
-                      </div>
-                    </div>
-
-                    <div className={formStyles.field}>
-                  <div className="flex items-center justify-between mb-2">
-                    <Label className={formStyles.label}>
-                      Fotografías ({hallazgoForm.fotografias.length})
-                    </Label>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setIsAgregarFotoHallazgoOpen(true)}
-                      className="h-8"
-                    >
-                      <Plus className="h-4 w-4 mr-1" />
-                      Agregar
-                    </Button>
-                  </div>
-
-                  {/* Lista de fotografías */}
-                  {hallazgoForm.fotografias.length > 0 ? (
-                    <div className="grid grid-cols-2 gap-3">
-                      {hallazgoForm.fotografias.map((foto, index) => (
-                        <motion.div
-                          key={index}
-                          initial={{ opacity: 0, scale: 0.8 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          className="relative group"
-                        >
-                          <div className="aspect-square bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
-                            <img
-                              src={foto.url}
-                              alt={foto.titulo}
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-                          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
-                            <p className="text-xs text-white font-medium truncate">{foto.titulo}</p>
-                            {foto.latitud && foto.longitud && (
-                              <p className="text-xs text-white/70 truncate">
-                                {foto.latitud}, {foto.longitud}
-                              </p>
-                            )}
-                          </div>
-                          <Button
-                            type="button"
-                            onClick={() => handleEliminarFotoHallazgo(index)}
-                            variant="destructive"
-                            size="sm"
-                            className="absolute top-1 right-1 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
-                          >
-                            <X className="h-3 w-3" />
-                          </Button>
-                        </motion.div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center py-4 bg-gray-50 dark:bg-gray-800/30 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
-                      <ImageIcon className="h-8 w-8 mx-auto mb-2 text-gray-400" />
-                      <p className="text-xs text-gray-600 dark:text-gray-400">No hay fotografías</p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Botón para agregar hallazgo */}
-                <div className="flex justify-end">
-                  <Button 
-                    onClick={handleAgregarHallazgo} 
-                    disabled={!hallazgoForm.titulo || !hallazgoForm.descripcion}
-                    className={formStyles.submitButton}
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Agregar Hallazgo
-                  </Button>
-                </div>
-                  </div>
-                </motion.div>
-            )}
-          </AnimatePresence>
-
-            {/* Evidencias Fotográficas Generales */}
-            <div className={formStyles.section}>
-              <div className="flex items-center justify-between">
-                <h3 className={formStyles.sectionTitle}>
-                  Fotografías Generales ({evidenciasTemporales.length})
-                </h3>
-                <Button
-                  onClick={() => setIsAddEvidenciaOpen(true)}
-                  size="sm"
-                  variant="outline"
-                  className="h-8"
-                >
-                  <Plus className="h-4 w-4 mr-1" />
-                  Agregar
-                </Button>
-              </div>
-
-              {evidenciasTemporales.length === 0 ? (
-                <div className="text-center py-8 bg-gray-50 dark:bg-gray-800/30 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
-                  <Camera className="h-12 w-12 mx-auto mb-2 text-gray-300 dark:text-gray-600" />
-                  <p className={textStyles.muted}>No se han agregado fotografías generales</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {evidenciasTemporales.map((evidencia) => (
-                    <div key={evidencia.id} className="relative group">
-                      <div className="aspect-square bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
-                        <img
-                          src={evidencia.url}
-                          alt={evidencia.descripcion}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
-                        <p className="text-xs text-white font-medium">{evidencia.tipo}</p>
-                        {evidencia.descripcion && (
-                          <p className="text-xs text-white/80 truncate">{evidencia.descripcion}</p>
-                        )}
-                      </div>
-                      <Button
-                        onClick={() => handleEliminarEvidencia(evidencia.id)}
-                        variant="destructive"
-                        size="sm"
-                        className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
-                      >
-                        <X className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
 
           {/* Footer */}
@@ -1433,68 +1524,6 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
               </div>
             </div>
 
-            {/* Fotografías */}
-            <div className={formStyles.section}>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className={formStyles.sectionTitle}>
-                  <Camera className="inline-block h-4 w-4 mr-2 text-blue-600 dark:text-blue-400" />
-                  Fotografías ({hallazgoForm.fotografias.length})
-                </h3>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsAgregarFotoHallazgoOpen(true)}
-                  className={buttonStyles.outline}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Agregar Foto
-                </Button>
-              </div>
-
-              {/* Lista de fotografías */}
-              {hallazgoForm.fotografias.length > 0 ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {hallazgoForm.fotografias.map((foto, index) => (
-                    <div key={index} className="relative group">
-                      <div className="aspect-square bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden border-2 border-gray-200 dark:border-gray-700">
-                        <img
-                          src={foto.url}
-                          alt={foto.descripcion}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                      <Button
-                        type="button"
-                        onClick={() => handleEliminarFotoHallazgo(index)}
-                        variant="destructive"
-                        size="sm"
-                        className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
-                      >
-                        <X className="h-3 w-3" />
-                      </Button>
-                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
-                        <p className="text-xs text-white font-medium truncate">{foto.descripcion}</p>
-                        {foto.latitud && foto.longitud && (
-                          <p className="text-xs text-white/70 truncate">
-                            {foto.latitud}, {foto.longitud}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-6 bg-gray-50 dark:bg-gray-800/50 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700">
-                  <ImageIcon className="h-12 w-12 mx-auto mb-2 text-gray-400" />
-                  <p className="text-sm text-gray-600 dark:text-gray-400">No hay fotografías agregadas</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                    Haz clic en "Agregar Foto" para incluir evidencia fotográfica
-                  </p>
-                </div>
-              )}
-            </div>
-
             {/* Footer */}
             <div className={formStyles.footer}>
               <Button 
@@ -1517,20 +1546,6 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
           </form>
         </DialogContent>
       </Dialog>
-
-      {/* Componente reutilizable para agregar fotografía a hallazgos */}
-      <FormularioFotografia
-        isOpen={isAgregarFotoHallazgoOpen}
-        onClose={() => setIsAgregarFotoHallazgoOpen(false)}
-        onSubmit={handleSubmitFotoHallazgo}
-      />
-
-      {/* Componente reutilizable para agregar fotografía general (evidencia) */}
-      <FormularioFotografia
-        isOpen={isAddEvidenciaOpen}
-        onClose={() => setIsAddEvidenciaOpen(false)}
-        onSubmit={handleSubmitFotoEvidencia}
-      />
 
       {/* Modal para agregar punto de coordenada */}
       <Dialog open={isAddCoordenadaOpen} onOpenChange={setIsAddCoordenadaOpen}>
@@ -1643,10 +1658,10 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Baja">Baja</SelectItem>
-                      <SelectItem value="Media">Media</SelectItem>
-                      <SelectItem value="Alta">Alta</SelectItem>
-                      <SelectItem value="Crítica">Crítica</SelectItem>
+                      <SelectItem value="Leve">Leve</SelectItem>
+                      <SelectItem value="Moderado">Moderado</SelectItem>
+                      <SelectItem value="Grave">Grave</SelectItem>
+                      <SelectItem value="Crítico">Crítico</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1708,73 +1723,6 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
               </div>
             </div>
 
-            {/* Fotografías */}
-            <div className={formStyles.section}>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className={formStyles.sectionTitle}>
-                  <Camera className="inline-block h-4 w-4 mr-2 text-blue-600 dark:text-blue-400" />
-                  Fotografías ({hallazgoForm.fotografias.length})
-                </h3>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsAgregarFotoHallazgoOpen(true)}
-                  className={buttonStyles.outline}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Agregar Foto
-                </Button>
-              </div>
-
-              {/* Lista de fotografías */}
-              {hallazgoForm.fotografias.length > 0 ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {hallazgoForm.fotografias.map((foto, index) => (
-                    <motion.div
-                      key={index}
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className="relative group"
-                    >
-                      <div className="aspect-square bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden border-2 border-gray-200 dark:border-gray-700">
-                        <img
-                          src={foto.url}
-                          alt={foto.descripcion}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                      <Button
-                        type="button"
-                        onClick={() => handleEliminarFotoHallazgo(index)}
-                        variant="destructive"
-                        size="sm"
-                        className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
-                      >
-                        <X className="h-3 w-3" />
-                      </Button>
-                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
-                        <p className="text-xs text-white font-medium truncate">{foto.descripcion}</p>
-                        {foto.latitud && foto.longitud && (
-                          <p className="text-xs text-white/70 truncate">
-                            {foto.latitud}, {foto.longitud}
-                          </p>
-                        )}
-                      </div>
-                    </motion.div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-6 bg-gray-50 dark:bg-gray-800/50 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700">
-                  <ImageIcon className="h-12 w-12 mx-auto mb-2 text-gray-400" />
-                  <p className="text-sm text-gray-600 dark:text-gray-400">No hay fotografías agregadas</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                    Haz clic en "Agregar Foto" para incluir evidencia fotográfica
-                  </p>
-                </div>
-              )}
-            </div>
-
             {/* Footer */}
             <div className={formStyles.footer}>
               <Button 
@@ -1798,11 +1746,20 @@ export function RegistroDiario({ userPermissions, currentUser }: RegistroDiarioP
               </Button>
               <Button 
                 type="submit"
-                disabled={!hallazgoForm.titulo || !hallazgoForm.descripcion}
+                disabled={!hallazgoForm.titulo || !hallazgoForm.descripcion || isSaving}
                 className={formStyles.submitButton}
               >
-                <AlertTriangle className="h-4 w-4 mr-2" />
-                Reportar Hallazgo
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Guardando...
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle className="h-4 w-4 mr-2" />
+                    Reportar Hallazgo
+                  </>
+                )}
               </Button>
             </div>
           </form>

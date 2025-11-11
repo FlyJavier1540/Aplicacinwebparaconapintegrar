@@ -4,10 +4,64 @@
  * Servicio centralizado que maneja toda la lógica funcional del módulo de Gestión de Usuarios,
  * incluyendo CRUD de usuarios, validación de permisos, gestión de estados y transformación de datos.
  * 
+ * CONEXIÓN: Consulta directamente a Supabase desde el frontend
+ * 
+ * OPTIMIZACIONES:
+ * ✅ Sistema de caché con TTL de 30 segundos
+ * ✅ Invalidación automática de caché en operaciones de escritura
+ * ✅ Reducción de peticiones al backend
+ * 
  * @module utils/gestionUsuariosService
  */
 
-import { usuarios } from '../data/mock-data';
+import { projectId } from './supabase/info';
+import { getRequiredAuthToken } from './base-api-service';
+
+const API_BASE_URL = `https://${projectId}.supabase.co/functions/v1/make-server-276018ed`;
+
+// ===== SISTEMA DE CACHÉ =====
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+const CACHE_TTL = 30000; // 30 segundos
+let usuariosCache: CacheEntry<Usuario[]> | null = null;
+
+/**
+ * Invalida el caché de usuarios
+ */
+function invalidateCache(): void {
+  usuariosCache = null;
+}
+
+/**
+ * Obtiene datos del caché si están vigentes
+ */
+function getFromCache(): Usuario[] | null {
+  if (!usuariosCache) return null;
+  
+  const now = Date.now();
+  const isExpired = now - usuariosCache.timestamp > CACHE_TTL;
+  
+  if (isExpired) {
+    usuariosCache = null;
+    return null;
+  }
+  
+  return usuariosCache.data;
+}
+
+/**
+ * Guarda datos en el caché
+ */
+function saveToCache(data: Usuario[]): void {
+  usuariosCache = {
+    data,
+    timestamp: Date.now()
+  };
+}
 
 /**
  * Interface para usuario
@@ -16,6 +70,7 @@ export interface Usuario {
   id: string;
   nombre: string;
   apellido: string;
+  dpi: string;
   email: string;
   telefono?: string;
   rol: 'Administrador' | 'Coordinador' | 'Guardarecurso';
@@ -43,7 +98,7 @@ export interface Usuario {
 export interface UsuarioFormData {
   nombre: string;
   apellido: string;
-  cedula: string;
+  dpi: string;
   telefono: string;
   email: string;
   password: string;
@@ -59,9 +114,292 @@ export interface EstadoPendiente {
   nuevoEstado: 'Activo' | 'Desactivado' | 'Suspendido';
 }
 
+// ===== FUNCIONES DE API =====
+
 /**
- * 🔍 FILTRADO Y BÚSQUEDA
+ * Obtiene todos los usuarios (Administradores y Coordinadores) desde el backend
+ * 
+ * OPTIMIZACIÓN: Implementa caché con TTL de 30 segundos
+ * 
+ * @returns Promesa con array de usuarios
  */
+export async function fetchUsuarios(): Promise<Usuario[]> {
+  // Intentar obtener del caché primero
+  const cachedData = getFromCache();
+  if (cachedData) {
+    return cachedData;
+  }
+
+  try {
+    // Obtener token JWT requerido (lanzará error si no existe)
+    const token = getRequiredAuthToken();
+
+    const response = await fetch(`${API_BASE_URL}/usuarios`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('Error al obtener usuarios:', errorData);
+      return [];
+    }
+
+    const { success, usuarios } = await response.json();
+
+    if (!success || !usuarios) {
+      return [];
+    }
+
+    // Mapear datos al formato Usuario del frontend
+    const mappedUsuarios = usuarios.map((user: any) => {
+      const rolNombre = user.rol?.rl_nombre || 'Coordinador';
+      const estadoNombre = user.estado?.std_nombre || 'Activo';
+      
+      return {
+        id: user.usr_id.toString(),
+        nombre: user.usr_nombre,
+        apellido: user.usr_apellido,
+        dpi: user.usr_dpi || '',
+        email: user.usr_correo,
+        telefono: user.usr_telefono || '',
+        rol: rolNombre as 'Administrador' | 'Coordinador' | 'Guardarecurso',
+        estado: estadoNombre as 'Activo' | 'Desactivado' | 'Suspendido',
+        fechaCreacion: new Date().toISOString().split('T')[0],
+        ultimoAcceso: undefined,
+        permisos: getPermisosByRol(rolNombre),
+        configuracion: {
+          notificacionesEmail: true,
+          notificacionesSMS: false,
+          tema: 'sistema',
+          idioma: 'es'
+        }
+      };
+    });
+
+    // Guardar en caché
+    saveToCache(mappedUsuarios);
+    
+    return mappedUsuarios;
+
+  } catch (error) {
+    console.error('Error en fetchUsuarios:', error);
+    return [];
+  }
+}
+
+/**
+ * Crea un nuevo usuario a través del backend
+ * 
+ * OPTIMIZACIÓN: Invalida caché automáticamente después de crear
+ * 
+ * @param formData - Datos del formulario
+ * @returns Promesa con el usuario creado o null si hay error
+ */
+export async function createUsuario(formData: UsuarioFormData): Promise<Usuario | null> {
+  try {
+    // Obtener token JWT requerido (lanzará error si no existe)
+    const token = getRequiredAuthToken();
+
+    const response = await fetch(`${API_BASE_URL}/usuarios`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        nombre: formData.nombre,
+        apellido: formData.apellido,
+        cedula: formData.dpi,
+        telefono: formData.telefono,
+        email: formData.email,
+        password: formData.password
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('Error al crear usuario:', errorData);
+      return null;
+    }
+
+    const { success, usuario } = await response.json();
+
+    if (!success || !usuario) {
+      return null;
+    }
+
+    // Invalidar caché para que la próxima consulta obtenga datos frescos
+    invalidateCache();
+
+    // Retornar usuario creado
+    return {
+      id: usuario.usr_id.toString(),
+      nombre: usuario.usr_nombre,
+      apellido: usuario.usr_apellido,
+      dpi: usuario.usr_dpi || '',
+      email: usuario.usr_correo,
+      telefono: usuario.usr_telefono || '',
+      rol: 'Coordinador',
+      estado: 'Activo',
+      fechaCreacion: new Date().toISOString().split('T')[0],
+      permisos: getPermisosByRol('Coordinador'),
+      configuracion: {
+        notificacionesEmail: true,
+        notificacionesSMS: false,
+        tema: 'sistema',
+        idioma: 'es'
+      }
+    };
+
+  } catch (error) {
+    console.error('Error en createUsuario:', error);
+    return null;
+  }
+}
+
+/**
+ * Actualiza un usuario existente a través del backend
+ * 
+ * OPTIMIZACIÓN: Invalida caché automáticamente después de actualizar
+ * 
+ * @param usuario - Usuario a actualizar
+ * @param formData - Datos del formulario
+ * @returns Promesa con el usuario actualizado o null si hay error
+ */
+export async function updateUsuario(
+  usuario: Usuario,
+  formData: UsuarioFormData
+): Promise<Usuario | null> {
+  try {
+    // Obtener token JWT requerido (lanzará error si no existe)
+    const token = getRequiredAuthToken();
+
+    const response = await fetch(`${API_BASE_URL}/usuarios/${usuario.id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        nombre: formData.nombre,
+        apellido: formData.apellido,
+        telefono: formData.telefono,
+        email: formData.email
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('Error al actualizar usuario:', errorData);
+      return null;
+    }
+
+    const { success, usuario: data } = await response.json();
+
+    if (!success || !data) {
+      return null;
+    }
+
+    // Invalidar caché para que la próxima consulta obtenga datos frescos
+    invalidateCache();
+
+    // Retornar usuario actualizado
+    return {
+      id: data.usr_id.toString(),
+      nombre: data.usr_nombre,
+      apellido: data.usr_apellido,
+      dpi: data.usr_dpi || '',
+      email: data.usr_correo,
+      telefono: data.usr_telefono || '',
+      rol: data.rol?.rl_nombre as 'Administrador' | 'Coordinador' | 'Guardarecurso',
+      estado: data.estado?.std_nombre as 'Activo' | 'Desactivado' | 'Suspendido',
+      fechaCreacion: usuario.fechaCreacion,
+      ultimoAcceso: usuario.ultimoAcceso,
+      permisos: usuario.permisos,
+      configuracion: usuario.configuracion
+    };
+
+  } catch (error) {
+    console.error('Error en updateUsuario:', error);
+    return null;
+  }
+}
+
+/**
+ * Cambia el estado de un usuario a través del backend
+ * 
+ * OPTIMIZACIÓN: Invalida caché automáticamente después de cambiar estado
+ * 
+ * @param usuario - Usuario a actualizar
+ * @param nuevoEstado - Nuevo estado
+ * @returns Promesa con el usuario actualizado o null si hay error
+ */
+export async function changeEstadoUsuario(
+  usuario: Usuario,
+  nuevoEstado: 'Activo' | 'Desactivado' | 'Suspendido'
+): Promise<Usuario | null> {
+  try {
+    // Obtener token JWT requerido (lanzará error si no existe)
+    const token = getRequiredAuthToken();
+
+    const response = await fetch(`${API_BASE_URL}/usuarios/${usuario.id}/estado`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        nuevoEstado
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('Error al cambiar estado:', errorData);
+      return null;
+    }
+
+    const { success } = await response.json();
+
+    if (!success) {
+      return null;
+    }
+
+    // Invalidar caché para que la próxima consulta obtenga datos frescos
+    invalidateCache();
+
+    // Retornar usuario actualizado
+    return {
+      ...usuario,
+      estado: nuevoEstado
+    };
+
+  } catch (error) {
+    console.error('Error en changeEstadoUsuario:', error);
+    return null;
+  }
+}
+
+// ===== FUNCIONES DE UTILIDAD =====
+
+/**
+ * Obtiene permisos basados en el rol
+ */
+function getPermisosByRol(rol: string) {
+  return {
+    gestionPersonal: rol === 'Administrador' || rol === 'Coordinador',
+    operacionesCampo: true,
+    controlSeguimiento: rol === 'Administrador' || rol === 'Coordinador',
+    administracion: rol === 'Administrador',
+    reportes: rol === 'Administrador' || rol === 'Coordinador'
+  };
+}
+
+// ===== FUNCIONES DE FILTRADO Y BÚSQUEDA =====
 
 /**
  * Filtra usuarios (solo Administradores y Coordinadores, excluyendo Desactivados)
@@ -88,12 +426,15 @@ export function filterUsuarios(
   });
 }
 
-/**
- * 🔐 VALIDACIÓN DE PERMISOS
- */
+// ===== VALIDACIÓN DE PERMISOS =====
 
 /**
  * Verifica si se puede cambiar la contraseña de un usuario
+ * 
+ * REGLAS:
+ * - NUNCA se puede cambiar la contraseña de un Administrador (solo ellos mismos)
+ * - Administradores pueden cambiar contraseñas de Coordinadores y Guardarecursos
+ * - Coordinadores pueden cambiar contraseñas de Guardarecursos únicamente
  */
 export function canChangeUserPassword(
   currentUser: any,
@@ -101,17 +442,29 @@ export function canChangeUserPassword(
 ): boolean {
   if (!currentUser) return false;
   
-  // NUNCA se puede cambiar la contraseña de un Administrador (solo ellos mismos)
+  // REGLA 1: NUNCA se puede cambiar la contraseña de un Administrador (solo ellos mismos)
   if (targetUser.rol === 'Administrador') return false;
   
-  // Administradores pueden cambiar contraseñas de Coordinadores
-  if (currentUser.rol === 'Administrador' && targetUser.rol === 'Coordinador') return true;
+  // REGLA 2: Administradores pueden cambiar contraseñas de Coordinadores y Guardarecursos
+  if (currentUser.rol === 'Administrador') {
+    return targetUser.rol === 'Coordinador' || targetUser.rol === 'Guardarecurso';
+  }
+  
+  // REGLA 3: Coordinadores pueden cambiar contraseñas de Guardarecursos únicamente
+  if (currentUser.rol === 'Coordinador' && targetUser.rol === 'Guardarecurso') {
+    return true;
+  }
   
   return false;
 }
 
 /**
  * Verifica si el usuario actual puede editar a otro usuario
+ * 
+ * REGLAS:
+ * - Un Administrador SOLO puede editarse a sí mismo (solo su teléfono)
+ * - Un Administrador NO puede editar a otros Administradores
+ * - Un Administrador puede editar a Coordinadores (todos los campos)
  */
 export function canEditUser(
   currentUser: any,
@@ -119,12 +472,8 @@ export function canEditUser(
 ): boolean {
   if (!currentUser) return false;
   
-  // Un Administrador solo puede editar:
-  // 1. A sí mismo
-  // 2. A Coordinadores
-  // NO puede editar a otros Administradores
   if (currentUser.rol === 'Administrador') {
-    // Puede editar a sí mismo
+    // Puede editar a sí mismo (solo teléfono)
     if (currentUser.id === targetUser.id) return true;
     
     // NO puede editar a otros Administradores
@@ -138,7 +487,24 @@ export function canEditUser(
 }
 
 /**
+ * Verifica si un administrador se está editando a sí mismo
+ * Solo en este caso puede cambiar su teléfono
+ */
+export function isEditingSelf(
+  currentUser: any,
+  targetUser: Usuario
+): boolean {
+  if (!currentUser || !targetUser) return false;
+  return currentUser.id === targetUser.id && currentUser.rol === 'Administrador';
+}
+
+/**
  * Verifica si el usuario actual puede cambiar el estado de otro usuario
+ * 
+ * REGLAS:
+ * - NO se puede cambiar el estado del usuario actual (sí mismo)
+ * - Un Administrador NO puede cambiar el estado de otros Administradores
+ * - Un Administrador puede cambiar el estado de Coordinadores
  */
 export function canChangeUserEstado(
   currentUser: any,
@@ -146,117 +512,21 @@ export function canChangeUserEstado(
 ): boolean {
   if (!currentUser) return false;
   
-  // No se puede cambiar el estado del usuario actual
+  // No se puede cambiar el estado del usuario actual (sí mismo)
   if (currentUser.id === targetUser.id) return false;
   
-  // Un Administrador SÍ puede cambiar el estado de otros Administradores
-  return true;
-}
-
-/**
- * 📋 CRUD DE USUARIOS
- */
-
-/**
- * Crea un nuevo usuario (siempre Coordinador y Activo)
- */
-export function createUsuario(formData: UsuarioFormData): Usuario {
-  const nuevoUsuario: Usuario = {
-    id: Date.now().toString(),
-    nombre: formData.nombre,
-    apellido: formData.apellido,
-    email: formData.email,
-    telefono: formData.telefono,
-    rol: 'Coordinador', // Siempre Coordinador
-    estado: 'Activo', // Siempre activo al crear
-    fechaCreacion: new Date().toISOString().split('T')[0],
-    permisos: {
-      gestionPersonal: true,
-      operacionesCampo: true,
-      controlSeguimiento: true,
-      administracion: false,
-      reportes: true
-    },
-    configuracion: {
-      notificacionesEmail: true,
-      notificacionesSMS: false,
-      tema: 'sistema',
-      idioma: 'es'
-    }
-  };
-
-  // Agregar usuario con contraseña a los datos globales
-  usuarios.push({
-    id: nuevoUsuario.id,
-    nombre: nuevoUsuario.nombre,
-    apellido: nuevoUsuario.apellido,
-    email: nuevoUsuario.email,
-    telefono: nuevoUsuario.telefono || '',
-    password: formData.password,
-    rol: 'Coordinador',
-    estado: nuevoUsuario.estado,
-    fechaCreacion: nuevoUsuario.fechaCreacion,
-    permisos: [],
-    areaAsignada: undefined
-  });
-
-  return nuevoUsuario;
-}
-
-/**
- * Actualiza un usuario existente (sin cambiar contraseña ni rol)
- */
-export function updateUsuario(
-  usuario: Usuario,
-  formData: UsuarioFormData
-): Usuario {
-  const usuarioActualizado = {
-    ...usuario,
-    nombre: formData.nombre,
-    apellido: formData.apellido,
-    email: formData.email,
-    telefono: formData.telefono
-  };
-
-  // Actualizar también en los datos globales
-  const userIndex = usuarios.findIndex(u => u.id === usuario.id);
-  if (userIndex !== -1) {
-    usuarios[userIndex] = {
-      ...usuarios[userIndex],
-      nombre: formData.nombre,
-      apellido: formData.apellido,
-      email: formData.email,
-      telefono: formData.telefono
-    };
+  if (currentUser.rol === 'Administrador') {
+    // NO puede cambiar el estado de otros Administradores
+    if (targetUser.rol === 'Administrador') return false;
+    
+    // Puede cambiar el estado de Coordinadores
+    if (targetUser.rol === 'Coordinador') return true;
   }
-
-  return usuarioActualizado;
+  
+  return false;
 }
 
-/**
- * 📊 GESTIÓN DE ESTADOS
- */
-
-/**
- * Cambia el estado de un usuario
- */
-export function changeEstadoUsuario(
-  usuario: Usuario,
-  nuevoEstado: 'Activo' | 'Desactivado' | 'Suspendido'
-): Usuario {
-  const usuarioActualizado = {
-    ...usuario,
-    estado: nuevoEstado
-  };
-
-  // Actualizar también en los datos globales
-  const userIndex = usuarios.findIndex(u => u.id === usuario.id);
-  if (userIndex !== -1) {
-    usuarios[userIndex].estado = nuevoEstado;
-  }
-
-  return usuarioActualizado;
-}
+// ===== GESTIÓN DE ESTADOS =====
 
 /**
  * Obtiene el texto del estado en pasado para mostrar en notificaciones
@@ -281,9 +551,7 @@ export function prepareEstadoPendiente(
   };
 }
 
-/**
- * 🎨 ESTILOS Y UI
- */
+// ===== ESTILOS Y UI =====
 
 /**
  * Obtiene la clase de badge para el estado
@@ -317,9 +585,7 @@ export function getRolBadgeClass(rol: string): string {
   }
 }
 
-/**
- * 📄 TRANSFORMACIÓN DE DATOS
- */
+// ===== TRANSFORMACIÓN DE DATOS =====
 
 /**
  * Crea datos de formulario vacíos
@@ -328,7 +594,7 @@ export function createEmptyFormData(): UsuarioFormData {
   return {
     nombre: '',
     apellido: '',
-    cedula: '',
+    dpi: '',
     telefono: '',
     email: '',
     password: '',
@@ -343,7 +609,7 @@ export function usuarioToFormData(usuario: Usuario): UsuarioFormData {
   return {
     nombre: usuario.nombre,
     apellido: usuario.apellido,
-    cedula: '',
+    dpi: usuario.dpi || '',
     telefono: usuario.telefono || '',
     email: usuario.email,
     password: '', // No mostrar contraseña en edición
@@ -351,38 +617,7 @@ export function usuarioToFormData(usuario: Usuario): UsuarioFormData {
   };
 }
 
-/**
- * Inicializa la lista de usuarios desde mock-data
- */
-export function initializeUsuariosList(): Usuario[] {
-  return usuarios.map(u => ({
-    ...u,
-    // Convertir roles anteriores al nuevo sistema de 3 roles
-    rol: (u.rol === 'Guardarecurso Senior' || u.rol === 'Guardarecurso Auxiliar') 
-      ? 'Guardarecurso' as const
-      : u.rol as 'Administrador' | 'Coordinador' | 'Guardarecurso',
-    estado: 'Activo' as const,
-    fechaCreacion: '2024-01-15',
-    ultimoAcceso: '2024-10-08T10:30:00Z',
-    permisos: {
-      gestionPersonal: u.rol === 'Administrador' || u.rol === 'Coordinador',
-      operacionesCampo: true,
-      controlSeguimiento: u.rol === 'Administrador' || u.rol === 'Coordinador',
-      administracion: u.rol === 'Administrador',
-      reportes: u.rol === 'Administrador' || u.rol === 'Coordinador'
-    },
-    configuracion: {
-      notificacionesEmail: true,
-      notificacionesSMS: false,
-      tema: 'sistema' as const,
-      idioma: 'es' as const
-    }
-  }));
-}
-
-/**
- * 🔧 CONSTANTES
- */
+// ===== CONSTANTES =====
 
 /**
  * Roles disponibles (solo Coordinador)
@@ -394,6 +629,15 @@ export const ROLES_DISPONIBLES = ['Coordinador'];
  * Servicio de Gestión de Usuarios - Export centralizado
  */
 export const gestionUsuariosService = {
+  // API
+  fetchUsuarios,
+  createUsuario,
+  updateUsuario,
+  changeEstadoUsuario,
+  
+  // Caché
+  invalidateCache,
+  
   // Filtrado
   filterUsuarios,
   
@@ -401,13 +645,9 @@ export const gestionUsuariosService = {
   canChangeUserPassword,
   canEditUser,
   canChangeUserEstado,
-  
-  // CRUD
-  createUsuario,
-  updateUsuario,
+  isEditingSelf,
   
   // Estados
-  changeEstadoUsuario,
   getEstadoTexto,
   prepareEstadoPendiente,
   
@@ -418,7 +658,6 @@ export const gestionUsuariosService = {
   // Transformación
   createEmptyFormData,
   usuarioToFormData,
-  initializeUsuariosList,
   
   // Constantes
   ROLES_DISPONIBLES

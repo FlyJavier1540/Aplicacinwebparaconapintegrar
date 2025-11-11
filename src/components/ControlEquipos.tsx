@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback, memo } from 'react';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -10,10 +10,12 @@ import { Textarea } from './ui/textarea';
 import { Plus, Edit, Search, Package, AlertTriangle, CheckCircle, Clock, Radio, Navigation, Eye, Camera, Car, Wrench, Box, Shield, XCircle, Tag, Hash, FileText, User, CheckCircle2, MoreVertical } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from './ui/alert-dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
-import { equiposAsignados, guardarecursos, areasProtegidas } from '../data/mock-data';
 import { motion } from 'motion/react';
 import { buttonStyles, filterStyles, formStyles, listCardStyles, layoutStyles, alertDialogStyles, cardStyles, getEstadoTopLineColor } from '../styles/shared-styles';
-import { equiposService, EstadoEquipo } from '../utils/equiposService';
+import { equiposService, EstadoEquipo, EquipoFormData } from '../utils/equiposService';
+import { guardarecursosService } from '../utils/guardarecursosService';
+import { toast } from 'sonner@2.0.3';
+import { forceLogout } from '../utils/base-api-service';
 
 interface ControlEquiposProps {
   userPermissions: {
@@ -31,221 +33,161 @@ interface ControlEquiposProps {
   };
 }
 
+// ===== COMPONENTES MEMOIZADOS =====
+
+/**
+ * Card de equipo - Memoizado
+ */
+interface EquipoCardProps {
+  equipo: any;
+  index: number;
+  guardarecurso?: any;
+  isGuardarecurso: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  onEdit: (equipo: any) => void;
+  onEstadoClick: (equipo: any, estado: EstadoEquipo) => void;
+  getEstadoBadgeClass: (estado: EstadoEquipo) => string;
+}
+
+const EquipoCard = memo(({
+  equipo,
+  index,
+  guardarecurso,
+  isGuardarecurso,
+  canEdit,
+  canDelete,
+  onEdit,
+  onEstadoClick,
+  getEstadoBadgeClass
+}: EquipoCardProps) => {
+  const handleEdit = useCallback(() => onEdit(equipo), [onEdit, equipo]);
+  const handleOperativo = useCallback(() => onEstadoClick(equipo, 'Operativo'), [onEstadoClick, equipo]);
+  const handleReparacion = useCallback(() => onEstadoClick(equipo, 'En Reparación'), [onEstadoClick, equipo]);
+  const handleDesactivado = useCallback(() => onEstadoClick(equipo, 'Desactivado'), [onEstadoClick, equipo]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay: index * 0.05 }}
+    >
+      <Card className={`${cardStyles.baseWithOverflow} ${listCardStyles.card}`}>
+        <div className={getEstadoTopLineColor(equipo.estado)} />
+        <CardContent className={listCardStyles.content}>
+          {/* Header con nombre y acciones */}
+          <div className={listCardStyles.header}>
+            <div className={listCardStyles.headerContent}>
+              <h3 className={listCardStyles.title}>{equipo.nombre}</h3>
+              <Badge className={`${getEstadoBadgeClass(equipo.estado)} ${listCardStyles.badge}`}>
+                {equipo.estado}
+              </Badge>
+            </div>
+            <div className={listCardStyles.headerActions}>
+              {!isGuardarecurso && canEdit && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleEdit}
+                  className={listCardStyles.actionButtonEdit}
+                  title="Editar equipo"
+                >
+                  <Edit className="h-4 w-4" />
+                </Button>
+              )}
+              {!isGuardarecurso && canDelete && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      title="Cambiar estado"
+                    >
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuLabel className="text-xs">Cambiar Estado</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={handleOperativo}
+                      disabled={equipo.estado === 'Operativo'}
+                      className="text-xs"
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5 mr-2 text-green-600" />
+                      Operativo
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={handleReparacion}
+                      disabled={equipo.estado === 'En Reparación'}
+                      className="text-xs"
+                    >
+                      <Wrench className="h-3.5 w-3.5 mr-2 text-orange-600" />
+                      En Reparación
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={handleDesactivado}
+                      disabled={equipo.estado === 'Desactivado'}
+                      className="text-xs"
+                    >
+                      <XCircle className="h-3.5 w-3.5 mr-2 text-gray-600" />
+                      Desactivado
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
+          </div>
+
+          {/* Información del equipo */}
+          <div className={listCardStyles.infoSection}>
+            <div className={listCardStyles.infoItem}>
+              <Hash className={listCardStyles.infoIcon} />
+              <span className={listCardStyles.infoText}>{equipo.codigo}</span>
+            </div>
+
+            {equipo.marca && (
+              <div className={listCardStyles.infoItem}>
+                <Tag className={listCardStyles.infoIcon} />
+                <span className={listCardStyles.infoText}>{equipo.marca} {equipo.modelo && `- ${equipo.modelo}`}</span>
+              </div>
+            )}
+
+            {/* Asignado a */}
+            <div className={listCardStyles.infoItem}>
+              <User className={listCardStyles.infoIcon} />
+              {guardarecurso ? (
+                <span className={listCardStyles.infoText}>
+                  {guardarecurso.nombre} {guardarecurso.apellido}
+                </span>
+              ) : (
+                <span className="text-gray-500 dark:text-gray-400 italic text-sm">Sin asignar</span>
+              )}
+            </div>
+          </div>
+
+          {/* Observaciones */}
+          {equipo.observaciones && (
+            <p className={listCardStyles.description}>
+              {equipo.observaciones}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+});
+
+EquipoCard.displayName = 'EquipoCard';
+
+// ===== COMPONENTE PRINCIPAL =====
+
 export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposProps) {
-  const isGuardarecurso = equiposService.isGuardarecurso(currentUser);
-  const [equiposList, setEquiposList] = useState([
-    ...equiposAsignados,
-    {
-      id: '4',
-      nombre: 'Cámara Canon EOS R6',
-      tipo: 'Cámara' as const,
-      codigo: 'CAM-001',
-      marca: 'Canon',
-      modelo: 'EOS R6',
-      fechaAsignacion: '2024-03-15',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '1'
-    },
-    {
-      id: '5',
-      nombre: 'Vehículo Toyota Hilux',
-      tipo: 'Vehículo' as const,
-      codigo: 'VEH-001',
-      marca: 'Toyota',
-      modelo: 'Hilux 2023',
-      fechaAsignacion: '2024-01-10',
-      estado: 'Operativo' as const,
-      observaciones: 'Mantenimiento completado'
-    },
-    {
-      id: '6',
-      nombre: 'Radio Motorola XTR',
-      tipo: 'Radio' as const,
-      codigo: 'RAD-004',
-      marca: 'Motorola',
-      modelo: 'XTR 446',
-      fechaAsignacion: '2024-02-05',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '3'
-    },
-    {
-      id: '7',
-      nombre: 'GPS Garmin Montana 700i',
-      tipo: 'GPS' as const,
-      codigo: 'GPS-003',
-      marca: 'Garmin',
-      modelo: 'Montana 700i',
-      fechaAsignacion: '2024-03-10',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '4'
-    },
-    {
-      id: '8',
-      nombre: 'Binoculares Bushnell Legend',
-      tipo: 'Binoculares' as const,
-      codigo: 'BIN-003',
-      marca: 'Bushnell',
-      modelo: 'Legend Ultra HD',
-      fechaAsignacion: '2024-01-20',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '5'
-    },
-    {
-      id: '9',
-      nombre: 'Cámara Nikon D850',
-      tipo: 'Cámara' as const,
-      codigo: 'CAM-002',
-      marca: 'Nikon',
-      modelo: 'D850',
-      fechaAsignacion: '2024-02-15',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '2'
-    },
-    {
-      id: '10',
-      nombre: 'Vehículo Ford Ranger',
-      tipo: 'Vehículo' as const,
-      codigo: 'VEH-002',
-      marca: 'Ford',
-      modelo: 'Ranger XLT 2023',
-      fechaAsignacion: '2024-01-05',
-      estado: 'Operativo' as const,
-      observaciones: 'Asignado a Petén'
-    },
-    {
-      id: '11',
-      nombre: 'Machete Tramontina',
-      tipo: 'Herramienta' as const,
-      codigo: 'HER-001',
-      marca: 'Tramontina',
-      modelo: '18 pulgadas',
-      fechaAsignacion: '2024-03-01',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '6'
-    },
-    {
-      id: '12',
-      nombre: 'GPS Garmin eTrex 32x',
-      tipo: 'GPS' as const,
-      codigo: 'GPS-004',
-      marca: 'Garmin',
-      modelo: 'eTrex 32x',
-      fechaAsignacion: '2024-02-20',
-      estado: 'En Reparación' as const,
-      observaciones: 'Pantalla dañada'
-    },
-    {
-      id: '13',
-      nombre: 'Radio Baofeng UV-5R',
-      tipo: 'Radio' as const,
-      codigo: 'RAD-005',
-      marca: 'Baofeng',
-      modelo: 'UV-5R',
-      fechaAsignacion: '2024-03-05',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '7'
-    },
-    {
-      id: '14',
-      nombre: 'Laptop Dell Latitude',
-      tipo: 'Otro' as const,
-      codigo: 'LAP-001',
-      marca: 'Dell',
-      modelo: 'Latitude 5420',
-      fechaAsignacion: '2024-01-15',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '8'
-    },
-    {
-      id: '15',
-      nombre: 'Cámara GoPro Hero 11',
-      tipo: 'Cámara' as const,
-      codigo: 'CAM-003',
-      marca: 'GoPro',
-      modelo: 'Hero 11 Black',
-      fechaAsignacion: '2024-02-28',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '9'
-    },
-    {
-      id: '16',
-      nombre: 'Binoculares Nikon Monarch',
-      tipo: 'Binoculares' as const,
-      codigo: 'BIN-004',
-      marca: 'Nikon',
-      modelo: 'Monarch 7',
-      fechaAsignacion: '2024-03-12',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '10'
-    },
-    {
-      id: '17',
-      nombre: 'Vehículo Chevrolet S10',
-      tipo: 'Vehículo' as const,
-      codigo: 'VEH-003',
-      marca: 'Chevrolet',
-      modelo: 'S10 High Country',
-      fechaAsignacion: '2023-12-20',
-      estado: 'En Reparación' as const,
-      observaciones: 'Motor averiado, en espera de repuestos'
-    },
-    {
-      id: '18',
-      nombre: 'GPS Magellan eXplorist',
-      tipo: 'GPS' as const,
-      codigo: 'GPS-005',
-      marca: 'Magellan',
-      modelo: 'eXplorist 310',
-      fechaAsignacion: '2024-01-25',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '11'
-    },
-    {
-      id: '19',
-      nombre: 'Radio Kenwood TK-3402',
-      tipo: 'Radio' as const,
-      codigo: 'RAD-006',
-      marca: 'Kenwood',
-      modelo: 'TK-3402U16P',
-      fechaAsignacion: '2024-02-10',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '12'
-    },
-    {
-      id: '20',
-      nombre: 'Drone DJI Mavic 3',
-      tipo: 'Otro' as const,
-      codigo: 'DRO-001',
-      marca: 'DJI',
-      modelo: 'Mavic 3',
-      fechaAsignacion: '2024-03-20',
-      estado: 'Operativo' as const,
-      observaciones: 'Para vigilancia aérea'
-    },
-    {
-      id: '21',
-      nombre: 'Kit de Primeros Auxilios',
-      tipo: 'Otro' as const,
-      codigo: 'MED-001',
-      marca: 'Adventure Medical',
-      modelo: 'Ultralight/Watertight',
-      fechaAsignacion: '2024-01-30',
-      estado: 'Operativo' as const,
-      guardarecursoAsignado: '13'
-    },
-    {
-      id: '22',
-      nombre: 'Tableta Samsung Galaxy Tab',
-      tipo: 'Otro' as const,
-      codigo: 'TAB-001',
-      marca: 'Samsung',
-      modelo: 'Galaxy Tab S8',
-      fechaAsignacion: '2024-02-22',
-      estado: 'Desactivado' as const,
-      observaciones: 'Actualización de software'
-    },
-  ]);
-  
+  const [equiposList, setEquiposList] = useState<any[]>([]);
+  const [guardarecursos, setGuardarecursos] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [selectedEstado, setSelectedEstado] = useState<string>('todos');
   const [searchTerm, setSearchTerm] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingEquipo, setEditingEquipo] = useState<any>(null);
@@ -255,10 +197,46 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
   const [equipoToChange, setEquipoToChange] = useState<any>(null);
   const [newEstado, setNewEstado] = useState<EstadoEquipo | ''>('');
   
-  // Usar servicio para crear form data vacío
   const [formData, setFormData] = useState(equiposService.createEmptyFormData());
+  const [codigoDuplicado, setCodigoDuplicado] = useState(false);
 
-  // Filtrado usando el servicio
+  /**
+   * Verificar si es guardarecurso - Memoizado
+   */
+  const isGuardarecurso = useMemo(() => 
+    equiposService.isGuardarecurso(currentUser),
+    [currentUser]
+  );
+
+  /**
+   * Cargar datos - Memoizado
+   * 🔒 SEGURIDAD: Si hay error, fuerza logout
+   */
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const [equiposData, guardarecursosData] = await Promise.all([
+        equiposService.fetchEquipos(),
+        guardarecursosService.fetchGuardarecursos()
+      ]);
+      setEquiposList(equiposData);
+      setGuardarecursos(guardarecursosData);
+    } catch (error) {
+      console.error('❌ ERROR AL CARGAR EQUIPOS - FORZANDO LOGOUT:', error);
+      forceLogout();
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Cargar datos desde Supabase
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  /**
+   * Filtrado usando el servicio - Memoizado
+   */
   const filteredEquipos = useMemo(() => {
     return equiposService.filterEquipos(
       equiposList,
@@ -266,71 +244,150 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
       currentUser,
       guardarecursos
     );
-  }, [equiposList, searchTerm, currentUser]);
+  }, [equiposList, searchTerm, currentUser, guardarecursos]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  /**
+   * Filtrar solo guardarecursos activos y ordenarlos alfabéticamente - Memoizado
+   */
+  const guardarecursosActivos = useMemo(() => {
+    return guardarecursos
+      .filter(g => g.estado === 'Activo')
+      .sort((a, b) => {
+        const nombreA = `${a.nombre} ${a.apellido}`;
+        const nombreB = `${b.nombre} ${b.apellido}`;
+        return nombreA.localeCompare(nombreB, 'es');
+      });
+  }, [guardarecursos]);
+
+  /**
+   * Mapa de guardarecursos por ID - Memoizado
+   */
+  const guardarecursosMap = useMemo(() => {
+    return new Map(guardarecursos.map(g => [g.id, g]));
+  }, [guardarecursos]);
+
+  /**
+   * Handler para submit - Memoizado
+   */
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (editingEquipo) {
-      // Actualizar usando el servicio
-      const equipoActualizado = equiposService.updateEquipo(editingEquipo, formData);
-      setEquiposList(prev => prev.map(eq => 
-        eq.id === editingEquipo.id ? equipoActualizado : eq
-      ));
-    } else {
-      // Crear usando el servicio
-      const nuevoEquipo = equiposService.createEquipo(formData);
-      setEquiposList(prev => [...prev, nuevoEquipo]);
+    // Validar código duplicado antes de enviar (solo al crear)
+    if (!editingEquipo && codigoDuplicado) {
+      toast.error('Ya existe un equipo con este código de inventario');
+      return;
     }
     
-    resetForm();
-    setIsDialogOpen(false);
-  };
+    try {
+      if (editingEquipo) {
+        await equiposService.updateEquipoAPI(editingEquipo.id, formData);
+        toast.success('Equipo actualizado exitosamente');
+      } else {
+        await equiposService.createEquipoAPI(formData);
+        toast.success('Equipo creado exitosamente');
+      }
+      
+      await loadData();
+      resetForm();
+      setIsDialogOpen(false);
+    } catch (error: any) {
+      console.error('❌ ERROR AL GUARDAR EQUIPO - FORZANDO LOGOUT:', error);
+      forceLogout();
+    }
+  }, [editingEquipo, formData, loadData, codigoDuplicado]);
 
-  const resetForm = () => {
+  /**
+   * Resetear formulario - Memoizado
+   */
+  const resetForm = useCallback(() => {
     setFormData(equiposService.createEmptyFormData());
     setEditingEquipo(null);
-  };
+    setCodigoDuplicado(false);
+  }, []);
 
-  const handleEdit = (equipo: any) => {
+  /**
+   * Verificar si el código ya existe - Memoizado
+   */
+  const verificarCodigoDuplicado = useCallback((codigo: string) => {
+    if (!codigo || editingEquipo) {
+      setCodigoDuplicado(false);
+      return;
+    }
+    
+    const existe = equiposList.some(equipo => 
+      equipo.codigo.toLowerCase() === codigo.toLowerCase().trim()
+    );
+    setCodigoDuplicado(existe);
+  }, [equiposList, editingEquipo]);
+
+  /**
+   * Handler para editar - Memoizado
+   */
+  const handleEdit = useCallback((equipo: any) => {
     setFormData(equiposService.equipoToFormData(equipo));
     setEditingEquipo(equipo);
+    setCodigoDuplicado(false); // Limpiar validación al editar
     setIsDialogOpen(true);
-  };
+  }, []);
 
-  const handleEstadoClick = (equipo: any, estado: EstadoEquipo) => {
+  /**
+   * Handler para cambio de estado - Memoizado
+   */
+  const handleEstadoClick = useCallback((equipo: any, estado: EstadoEquipo) => {
     setEquipoToChange(equipo);
     setNewEstado(estado);
     setConfirmDialogOpen(true);
-  };
+  }, []);
 
-  const confirmEstadoChange = () => {
+  /**
+   * Confirmar cambio de estado - Memoizado
+   */
+  const confirmEstadoChange = useCallback(async () => {
     if (equipoToChange && newEstado) {
-      // Actualizar estado usando el servicio
-      const equipoActualizado = equiposService.updateEstado(equipoToChange, newEstado as EstadoEquipo);
-      setEquiposList(prev => prev.map(equipo => 
-        equipo.id === equipoToChange.id ? equipoActualizado : equipo
-      ));
+      try {
+        await equiposService.updateEstadoAPI(equipoToChange.id, newEstado as EstadoEquipo);
+        toast.success('Estado del equipo actualizado');
+        await loadData();
+      } catch (error: any) {
+        console.error('❌ ERROR AL CAMBIAR ESTADO - FORZANDO LOGOUT:', error);
+        forceLogout();
+      }
     }
     setConfirmDialogOpen(false);
     setEquipoToChange(null);
     setNewEstado('');
-  };
+  }, [equipoToChange, newEstado, loadData]);
 
-  // Usar funciones del servicio para estilos
-  const getEstadoBadgeClass = (estado: EstadoEquipo) => {
+  /**
+   * Funciones del servicio para estilos - Memoizadas
+   */
+  const getEstadoBadgeClass = useCallback((estado: EstadoEquipo) => {
     return equiposService.getEstadoBadgeClass(estado);
-  };
+  }, []);
 
-  const getEstadoIcon = (estado: EstadoEquipo) => {
-    const iconName = equiposService.getEstadoIcon(estado);
-    switch (iconName) {
-      case 'CheckCircle2': return CheckCircle2;
-      case 'Wrench': return Wrench;
-      case 'XCircle': return XCircle;
-      default: return XCircle;
-    }
-  };
+  /**
+   * Handler para abrir diálogo nuevo - Memoizado
+   */
+  const handleOpenNewDialog = useCallback(() => {
+    resetForm();
+    setIsDialogOpen(true);
+  }, [resetForm]);
+
+  /**
+   * Handler para cancelar diálogo - Memoizado
+   */
+  const handleCancelDialog = useCallback(() => {
+    resetForm();
+    setIsDialogOpen(false);
+  }, [resetForm]);
+
+  /**
+   * Handler para limpiar filtros - Memoizado
+   */
+  const handleClearFilters = useCallback(() => {
+    setSearchTerm('');
+    setSelectedEstado('todos');
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -353,10 +410,7 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
           {/* Botón crear */}
           {userPermissions.canCreate && (
             <Button 
-              onClick={() => {
-                resetForm();
-                setIsDialogOpen(true);
-              }}
+              onClick={handleOpenNewDialog}
               className={buttonStyles.createButton}
             >
               <Plus className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-2" />
@@ -404,9 +458,14 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
                 
                 <div className={formStyles.grid}>
                   <div className={formStyles.field}>
-                    <Label htmlFor="nombre" className={formStyles.label}>
-                      Nombre del Equipo *
-                    </Label>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <Label htmlFor="nombre" className={formStyles.label}>
+                        Nombre del Equipo *
+                      </Label>
+                      {editingEquipo && (
+                        <span className="text-xs text-muted-foreground italic">No editable</span>
+                      )}
+                    </div>
                     <Input
                       id="nombre"
                       value={formData.nombre}
@@ -414,21 +473,42 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
                       placeholder="Ej: Radio Motorola XTR"
                       className={formStyles.input}
                       required
+                      readOnly={!!editingEquipo}
+                      disabled={!!editingEquipo}
                     />
                   </div>
                   
                   <div className={formStyles.field}>
-                    <Label htmlFor="codigo" className={formStyles.label}>
-                      Código de Inventario *
-                    </Label>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <Label htmlFor="codigo" className={formStyles.label}>
+                        Código de Inventario *
+                      </Label>
+                      {editingEquipo && (
+                        <span className="text-xs text-muted-foreground italic">No editable</span>
+                      )}
+                      {!editingEquipo && codigoDuplicado && (
+                        <span className="text-xs text-red-600 dark:text-red-400 font-medium">Código duplicado</span>
+                      )}
+                    </div>
                     <Input
                       id="codigo"
                       value={formData.codigo}
-                      onChange={(e) => setFormData({...formData, codigo: e.target.value})}
+                      onChange={(e) => {
+                        const newCodigo = e.target.value;
+                        setFormData({...formData, codigo: newCodigo});
+                        verificarCodigoDuplicado(newCodigo);
+                      }}
                       placeholder="Ej: RAD-001"
-                      className={formStyles.input}
+                      className={`${formStyles.input} ${!editingEquipo && codigoDuplicado ? 'border-red-500 dark:border-red-500 focus:ring-red-500' : ''}`}
                       required
+                      readOnly={!!editingEquipo}
+                      disabled={!!editingEquipo}
                     />
+                    {!editingEquipo && codigoDuplicado && (
+                      <p className="text-xs text-red-600 dark:text-red-400 mt-1">
+                        Ya existe un equipo con este código. Por favor, use uno diferente.
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -439,28 +519,42 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
                 
                 <div className={formStyles.grid}>
                   <div className={formStyles.field}>
-                    <Label htmlFor="marca" className={formStyles.label}>
-                      Marca
-                    </Label>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <Label htmlFor="marca" className={formStyles.label}>
+                        Marca
+                      </Label>
+                      {editingEquipo && (
+                        <span className="text-xs text-muted-foreground italic">No editable</span>
+                      )}
+                    </div>
                     <Input
                       id="marca"
                       value={formData.marca}
                       onChange={(e) => setFormData({...formData, marca: e.target.value})}
                       placeholder="Ej: Motorola"
                       className={formStyles.input}
+                      readOnly={!!editingEquipo}
+                      disabled={!!editingEquipo}
                     />
                   </div>
                   
                   <div className={formStyles.field}>
-                    <Label htmlFor="modelo" className={formStyles.label}>
-                      Modelo
-                    </Label>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <Label htmlFor="modelo" className={formStyles.label}>
+                        Modelo
+                      </Label>
+                      {editingEquipo && (
+                        <span className="text-xs text-muted-foreground italic">No editable</span>
+                      )}
+                    </div>
                     <Input
                       id="modelo"
                       value={formData.modelo}
                       onChange={(e) => setFormData({...formData, modelo: e.target.value})}
                       placeholder="Ej: XTR 446"
                       className={formStyles.input}
+                      readOnly={!!editingEquipo}
+                      disabled={!!editingEquipo}
                     />
                   </div>
                 </div>
@@ -472,23 +566,29 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
                 
                 <div className={formStyles.gridSingle}>
                   <div className={formStyles.field}>
-                    <Label htmlFor="guardarecurso" className={formStyles.label}>
-                      Asignado a
-                    </Label>
-                    <Select value={formData.guardarecursoAsignado} onValueChange={(value) => setFormData({...formData, guardarecursoAsignado: value})}>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <Label htmlFor="guardarecurso" className={formStyles.label}>
+                        Asignado a
+                      </Label>
+                      {editingEquipo?.estado === 'En Reparación' && (
+                        <span className="text-xs text-orange-600 dark:text-orange-400 italic">No disponible en reparación</span>
+                      )}
+                    </div>
+                    <Select 
+                      value={editingEquipo?.estado === 'En Reparación' ? 'none' : formData.guardarecursoAsignado} 
+                      onValueChange={(value) => setFormData({...formData, guardarecursoAsignado: value})}
+                      disabled={editingEquipo?.estado === 'En Reparación'}
+                    >
                       <SelectTrigger className={formStyles.selectTrigger}>
-                        <SelectValue placeholder="Seleccione guardarecurso (opcional)" />
+                        <SelectValue placeholder={editingEquipo?.estado === 'En Reparación' ? 'No se puede asignar (en reparación)' : 'Seleccione guardarecurso (opcional)'} />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">Sin asignar</SelectItem>
-                        {guardarecursos.map(g => {
-                          const area = areasProtegidas.find(a => a.id === g.areaAsignada);
-                          return (
-                            <SelectItem key={g.id} value={g.id}>
-                              {g.nombre} {g.apellido} - {area?.nombre || 'Sin área asignada'}
-                            </SelectItem>
-                          );
-                        })}
+                        {guardarecursosActivos.map(g => (
+                          <SelectItem key={g.id} value={g.id}>
+                            {g.nombre} {g.apellido}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -520,10 +620,7 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
                 <Button 
                   type="button" 
                   variant="outline" 
-                  onClick={() => {
-                    resetForm();
-                    setIsDialogOpen(false);
-                  }}
+                  onClick={handleCancelDialog}
                   className={formStyles.cancelButton}
                 >
                   Cancelar
@@ -531,8 +628,9 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
                 <Button 
                   type="submit" 
                   className={formStyles.submitButton}
+                  disabled={!editingEquipo && codigoDuplicado}
                 >
-                  Guardar
+                  {!editingEquipo && codigoDuplicado ? 'Código duplicado' : 'Guardar'}
                 </Button>
               </div>
             </form>
@@ -543,7 +641,16 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
       {/* Grid de equipos */}
       <div>
         <div>
-          {filteredEquipos.length === 0 ? (
+          {isLoading ? (
+            <Card className="border-0 shadow-lg">
+              <CardContent className="p-8 sm:p-12">
+                <div className="text-center">
+                  <Package className="h-12 w-12 sm:h-16 sm:w-16 mx-auto mb-3 sm:mb-4 text-muted-foreground opacity-30 animate-pulse" />
+                  <h3 className="mb-2 text-sm sm:text-base">Cargando equipos...</h3>
+                </div>
+              </CardContent>
+            </Card>
+          ) : filteredEquipos.length === 0 ? (
             <Card className="border-0 shadow-lg">
               <CardContent className="p-8 sm:p-12">
                 <div className="text-center">
@@ -560,10 +667,7 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
                   {!isGuardarecurso && (
                     <Button 
                       variant="outline" 
-                      onClick={() => {
-                        setSearchTerm('');
-                        setSelectedEstado('todos');
-                      }}
+                      onClick={handleClearFilters}
                       className="text-xs sm:text-sm"
                     >
                       Limpiar filtros
@@ -574,122 +678,20 @@ export function ControlEquipos({ userPermissions, currentUser }: ControlEquiposP
             </Card>
           ) : (
             <div className={layoutStyles.cardGrid}>
-              {filteredEquipos.map((equipo, index) => {
-                const guardarecurso = guardarecursos.find(g => g.id === (equipo as any).guardarecursoAsignado);
-                
-                return (
-                  <motion.div
-                    key={equipo.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3, delay: index * 0.05 }}
-                  >
-                    <Card className={`${cardStyles.baseWithOverflow} ${listCardStyles.card}`}>
-                      <div className={getEstadoTopLineColor(equipo.estado)} />
-                      <CardContent className={listCardStyles.content}>
-                        {/* Header con nombre y acciones */}
-                        <div className={listCardStyles.header}>
-                          <div className={listCardStyles.headerContent}>
-                            <h3 className={listCardStyles.title}>{equipo.nombre}</h3>
-                            <Badge className={`${getEstadoBadgeClass(equipo.estado)} ${listCardStyles.badge}`}>
-                              {equipo.estado}
-                            </Badge>
-                          </div>
-                          <div className={listCardStyles.headerActions}>
-                            {!isGuardarecurso && userPermissions.canEdit && (
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => handleEdit(equipo)}
-                                className={listCardStyles.actionButtonEdit}
-                                title="Editar equipo"
-                              >
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                            )}
-                            {!isGuardarecurso && userPermissions.canDelete && (
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-8 w-8"
-                                    title="Cambiar estado"
-                                  >
-                                    <MoreVertical className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuLabel className="text-xs">Cambiar Estado</DropdownMenuLabel>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    onClick={() => handleEstadoClick(equipo, 'Operativo')}
-                                    disabled={equipo.estado === 'Operativo'}
-                                    className="text-xs"
-                                  >
-                                    <CheckCircle2 className="h-3.5 w-3.5 mr-2 text-green-600" />
-                                    Operativo
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => handleEstadoClick(equipo, 'En Reparación')}
-                                    disabled={equipo.estado === 'En Reparación'}
-                                    className="text-xs"
-                                  >
-                                    <Wrench className="h-3.5 w-3.5 mr-2 text-orange-600" />
-                                    En Reparación
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => handleEstadoClick(equipo, 'Desactivado')}
-                                    disabled={equipo.estado === 'Desactivado'}
-                                    className="text-xs"
-                                  >
-                                    <XCircle className="h-3.5 w-3.5 mr-2 text-gray-600" />
-                                    Desactivado
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Información del equipo */}
-                        <div className={listCardStyles.infoSection}>
-                          <div className={listCardStyles.infoItem}>
-                            <Hash className={listCardStyles.infoIcon} />
-                            <span className={listCardStyles.infoText}>{equipo.codigo}</span>
-                          </div>
-
-                          {equipo.marca && (
-                            <div className={listCardStyles.infoItem}>
-                              <Tag className={listCardStyles.infoIcon} />
-                              <span className={listCardStyles.infoText}>{equipo.marca} {equipo.modelo && `- ${equipo.modelo}`}</span>
-                            </div>
-                          )}
-
-                          {/* Asignado a */}
-                          <div className={listCardStyles.infoItem}>
-                            <User className={listCardStyles.infoIcon} />
-                            {guardarecurso ? (
-                              <span className={listCardStyles.infoText}>
-                                {guardarecurso.nombre} {guardarecurso.apellido}
-                              </span>
-                            ) : (
-                              <span className="text-gray-500 dark:text-gray-400 italic text-sm">Sin asignar</span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Observaciones */}
-                        {equipo.observaciones && (
-                          <p className={listCardStyles.description}>
-                            {equipo.observaciones}
-                          </p>
-                        )}
-                      </CardContent>
-                    </Card>
-                  </motion.div>
-                );
-              })}
+              {filteredEquipos.map((equipo, index) => (
+                <EquipoCard
+                  key={equipo.id}
+                  equipo={equipo}
+                  index={index}
+                  guardarecurso={guardarecursosMap.get(equipo.guardarecursoAsignado)}
+                  isGuardarecurso={isGuardarecurso}
+                  canEdit={userPermissions.canEdit}
+                  canDelete={userPermissions.canDelete}
+                  onEdit={handleEdit}
+                  onEstadoClick={handleEstadoClick}
+                  getEstadoBadgeClass={getEstadoBadgeClass}
+                />
+              ))}
             </div>
           )}
         </div>

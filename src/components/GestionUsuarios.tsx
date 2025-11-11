@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -10,11 +10,14 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from './ui/alert-dialog';
 import { Alert, AlertDescription } from './ui/alert';
-import { Plus, Edit, Search, Users, Mail, Phone, CheckCircle2, Ban, UserX, User, Shield, UserCheck, Lock, Eye, EyeOff, Info, KeyRound, ChevronDown, IdCard, Briefcase, MoreVertical, Calendar } from 'lucide-react';
+import { Plus, Edit, Search, Users, Mail, Phone, CheckCircle2, Ban, UserX, User, Shield, UserCheck, Lock, Eye, EyeOff, Info, KeyRound, ChevronDown, IdCard, Briefcase, MoreVertical, Calendar, Loader2 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { CambiarContrasenaAdmin } from './CambiarContrasenaAdmin';
 import { buttonStyles, filterStyles, formStyles, tableStyles, estadoAlertStyles, getEstadoBadgeClass, cardStyles } from '../styles/shared-styles';
 import { gestionUsuariosService, Usuario, UsuarioFormData, EstadoPendiente } from '../utils/gestionUsuariosService';
+import { guardarecursosService } from '../utils/guardarecursosService';
+import { isValidSecurePassword } from '../utils/validators';
+import { forceLogout } from '../utils/base-api-service';
 
 interface GestionUsuariosProps {
   userPermissions: {
@@ -27,7 +30,8 @@ interface GestionUsuariosProps {
 }
 
 export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuariosProps) {
-  const [usuariosList, setUsuariosList] = useState<Usuario[]>(gestionUsuariosService.initializeUsuariosList());
+  const [usuariosList, setUsuariosList] = useState<Usuario[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -41,95 +45,268 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
   const [estadoPendiente, setEstadoPendiente] = useState<EstadoPendiente | null>(null);
 
   const [userForm, setUserForm] = useState<UsuarioFormData>(gestionUsuariosService.createEmptyFormData());
+  
+  // Estados para validación de duplicados
+  const [guardarecursosList, setGuardarecursosList] = useState<any[]>([]);
+  const [dpiDuplicado, setDpiDuplicado] = useState(false);
+  const [correoDuplicado, setCorreoDuplicado] = useState(false);
+  
+  // Estados para validación de contraseña
+  const [passwordErrors, setPasswordErrors] = useState<string[]>([]);
 
-  // Filtrar usuarios usando el servicio
-  const filteredUsers = gestionUsuariosService.filterUsuarios(usuariosList, searchTerm);
+  /**
+   * Carga todos los usuarios desde Supabase
+   * OPTIMIZACIÓN: useCallback para evitar recreación en cada render
+   */
+  const loadUsuarios = useCallback(async () => {
+    try {
+      setLoading(true);
+      const usuarios = await gestionUsuariosService.fetchUsuarios();
+      setUsuariosList(usuarios);
+    } catch (error) {
+      console.error('❌ ERROR AL CARGAR USUARIOS - FORZANDO LOGOUT:', error);
+      forceLogout();
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const handleSubmitUser = (e: React.FormEvent) => {
+  /**
+   * Carga todos los guardarecursos desde el backend - Memoizado
+   */
+  const loadGuardarecursos = useCallback(async () => {
+    try {
+      const data = await guardarecursosService.fetchGuardarecursos();
+      setGuardarecursosList(data);
+    } catch (error) {
+      console.error('❌ ERROR AL CARGAR GUARDARECURSOS - FORZANDO LOGOUT:', error);
+      forceLogout();
+    }
+  }, []);
+
+  // Cargar usuarios y guardarecursos al montar el componente
+  useEffect(() => {
+    loadUsuarios();
+    loadGuardarecursos();
+  }, [loadUsuarios, loadGuardarecursos]);
+
+  /**
+   * Filtrar usuarios usando el servicio
+   * OPTIMIZACIÓN: useMemo para evitar filtrado innecesario
+   */
+  const filteredUsers = useMemo(
+    () => gestionUsuariosService.filterUsuarios(usuariosList, searchTerm),
+    [usuariosList, searchTerm]
+  );
+
+  /**
+   * Resetea el formulario de usuario
+   * OPTIMIZACIÓN: useCallback para evitar recreación
+   */
+  const resetUserForm = useCallback(() => {
+    setUserForm(gestionUsuariosService.createEmptyFormData());
+    setEditingUser(null);
+    setShowPassword(false);
+    setDpiDuplicado(false);
+    setCorreoDuplicado(false);
+    setPasswordErrors([]);
+  }, []);
+
+  /**
+   * Maneja el envío del formulario de usuario
+   * OPTIMIZACIÓN: useCallback para evitar recreación
+   */
+  const handleSubmitUser = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (editingUser) {
-      // Validar que se puede editar este usuario usando el servicio
-      if (!gestionUsuariosService.canEditUser(currentUser, editingUser)) {
-        toast.error('Permisos insuficientes', {
-          description: 'No tienes permiso para editar este usuario.'
+    // Validar duplicados antes de enviar (solo al crear)
+    if (!editingUser) {
+      if (dpiDuplicado) {
+        toast.error('DPI duplicado', {
+          description: 'Este número de DPI ya está en uso por otro usuario del sistema.'
+        });
+        return;
+      }
+      if (correoDuplicado) {
+        toast.error('Correo duplicado', {
+          description: 'Este correo electrónico ya está en uso por otro usuario del sistema.'
         });
         return;
       }
       
-      // Editar existente usando el servicio
-      const usuarioActualizado = gestionUsuariosService.updateUsuario(editingUser, userForm);
-      
-      setUsuariosList(prev => prev.map(u => 
-        u.id === editingUser.id ? usuarioActualizado : u
-      ));
-      
-      toast.success('Usuario actualizado', {
-        description: 'Los datos del usuario han sido actualizados correctamente.'
-      });
-    } else {
-      // Crear nuevo usuario usando el servicio
-      const nuevoUsuario = gestionUsuariosService.createUsuario(userForm);
-      
-      setUsuariosList(prev => [...prev, nuevoUsuario]);
-      
-      toast.success('Coordinador creado exitosamente', {
-        description: `Se ha creado la cuenta de Coordinador para ${userForm.nombre} ${userForm.apellido}.`
-      });
+      // Validar contraseña segura (solo al crear)
+      const passwordValidation = isValidSecurePassword(userForm.password);
+      if (!passwordValidation.isValid) {
+        toast.error('Contraseña no cumple los requisitos', {
+          description: passwordValidation.errors[0]
+        });
+        return;
+      }
     }
     
-    resetUserForm();
-    setIsDialogOpen(false);
-  };
+    try {
+      if (editingUser) {
+        // Validar que se puede editar este usuario usando el servicio
+        if (!gestionUsuariosService.canEditUser(currentUser, editingUser)) {
+          toast.error('Permisos insuficientes', {
+            description: 'No tienes permiso para editar este usuario.'
+          });
+          return;
+        }
+        
+        // Editar existente usando el servicio
+        const usuarioActualizado = await gestionUsuariosService.updateUsuario(editingUser, userForm);
+        
+        if (usuarioActualizado) {
+          setUsuariosList(prev => prev.map(u => 
+            u.id === editingUser.id ? usuarioActualizado : u
+          ));
+          
+          toast.success('Usuario actualizado', {
+            description: 'Los datos del usuario han sido actualizados correctamente.'
+          });
+        } else {
+          toast.error('Error al actualizar', {
+            description: 'No se pudo actualizar el usuario. Intenta de nuevo.'
+          });
+          return;
+        }
+      } else {
+        // Crear nuevo usuario usando el servicio
+        const nuevoUsuario = await gestionUsuariosService.createUsuario(userForm);
+        
+        if (nuevoUsuario) {
+          setUsuariosList(prev => [...prev, nuevoUsuario]);
+          
+          toast.success('Coordinador creado exitosamente', {
+            description: `Se ha creado la cuenta de Coordinador para ${userForm.nombre} ${userForm.apellido}.`
+          });
+        } else {
+          toast.error('Error al crear usuario', {
+            description: 'No se pudo crear el usuario. Verifica que el email no exista.'
+          });
+          return;
+        }
+      }
+      
+      resetUserForm();
+      setIsDialogOpen(false);
+    } catch (error) {
+      console.error('❌ ERROR AL GUARDAR USUARIO - FORZANDO LOGOUT:', error);
+      forceLogout();
+    }
+  }, [editingUser, currentUser, userForm, dpiDuplicado, correoDuplicado, resetUserForm]);
 
-  const resetUserForm = () => {
-    setUserForm(gestionUsuariosService.createEmptyFormData());
-    setEditingUser(null);
-    setShowPassword(false);
-  };
+  /**
+   * Verificar si el DPI ya existe en TODOS los usuarios del sistema - Memoizado
+   */
+  const verificarDpiDuplicado = useCallback((dpi: string) => {
+    if (!dpi || editingUser) {
+      setDpiDuplicado(false);
+      return;
+    }
+    
+    const dpiLimpio = dpi.trim();
+    
+    // Buscar en usuarios (Administradores y Coordinadores)
+    const existeEnUsuarios = usuariosList.some(u => 
+      u.dpi === dpiLimpio
+    );
+    
+    // Buscar en guardarecursos
+    const existeEnGuardarecursos = guardarecursosList.some(g => 
+      g.dpi === dpiLimpio
+    );
+    
+    setDpiDuplicado(existeEnUsuarios || existeEnGuardarecursos);
+  }, [usuariosList, guardarecursosList, editingUser]);
 
-  const handleEditUser = (usuario: Usuario) => {
+  /**
+   * Verificar si el correo ya existe en TODOS los usuarios del sistema - Memoizado
+   */
+  const verificarCorreoDuplicado = useCallback((email: string) => {
+    if (!email || editingUser) {
+      setCorreoDuplicado(false);
+      return;
+    }
+    
+    const emailLimpio = email.toLowerCase().trim();
+    
+    // Buscar en usuarios (Administradores y Coordinadores)
+    const existeEnUsuarios = usuariosList.some(u => 
+      u.email.toLowerCase() === emailLimpio
+    );
+    
+    // Buscar en guardarecursos
+    const existeEnGuardarecursos = guardarecursosList.some(g => 
+      g.email.toLowerCase() === emailLimpio
+    );
+    
+    setCorreoDuplicado(existeEnUsuarios || existeEnGuardarecursos);
+  }, [usuariosList, guardarecursosList, editingUser]);
+
+  /**
+   * Maneja la edición de un usuario
+   * OPTIMIZACIÓN: useCallback para evitar recreación
+   */
+  const handleEditUser = useCallback((usuario: Usuario) => {
     setUserForm(gestionUsuariosService.usuarioToFormData(usuario));
     setEditingUser(usuario);
     setIsDialogOpen(true);
-  };
+  }, []);
 
-  const handleChangePassword = (usuario: Usuario) => {
+  /**
+   * Maneja el cambio de contraseña de un usuario
+   * OPTIMIZACIÓN: useCallback para evitar recreación
+   */
+  const handleChangePassword = useCallback((usuario: Usuario) => {
     setUserToChangePassword(usuario);
     setIsPasswordDialogOpen(true);
-  };
+  }, []);
 
-  // Función para manejar el click en cambio de estado (abre el AlertDialog)
-  const handleEstadoClick = (id: string, nuevoEstado: 'Activo' | 'Desactivado' | 'Suspendido') => {
+  /**
+   * Función para manejar el click en cambio de estado (abre el AlertDialog)
+   * OPTIMIZACIÓN: useCallback para evitar recreación
+   */
+  const handleEstadoClick = useCallback((id: string, nuevoEstado: 'Activo' | 'Desactivado' | 'Suspendido') => {
     const usuario = usuariosList.find(u => u.id === id);
     if (usuario) {
       setEstadoPendiente(gestionUsuariosService.prepareEstadoPendiente(usuario, nuevoEstado));
       setIsEstadoAlertOpen(true);
     }
-  };
+  }, [usuariosList]);
 
-  // Función para confirmar el cambio de estado
-  const handleConfirmEstadoChange = () => {
+  /**
+   * Función para confirmar el cambio de estado
+   * OPTIMIZACIÓN: useCallback para evitar recreación
+   */
+  const handleConfirmEstadoChange = useCallback(async () => {
     if (estadoPendiente) {
       const usuario = usuariosList.find(u => u.id === estadoPendiente.id);
       if (usuario) {
         // Cambiar estado usando el servicio
-        const usuarioActualizado = gestionUsuariosService.changeEstadoUsuario(usuario, estadoPendiente.nuevoEstado);
+        const usuarioActualizado = await gestionUsuariosService.changeEstadoUsuario(usuario, estadoPendiente.nuevoEstado);
         
-        setUsuariosList(prev => prev.map(u => 
-          u.id === estadoPendiente.id ? usuarioActualizado : u
-        ));
-        
-        const estadoTexto = gestionUsuariosService.getEstadoTexto(estadoPendiente.nuevoEstado);
-        
-        toast.success('Estado actualizado', {
-          description: `El usuario ${estadoPendiente.nombre} ha sido ${estadoTexto} correctamente.`
-        });
+        if (usuarioActualizado) {
+          setUsuariosList(prev => prev.map(u => 
+            u.id === estadoPendiente.id ? usuarioActualizado : u
+          ));
+          
+          const estadoTexto = gestionUsuariosService.getEstadoTexto(estadoPendiente.nuevoEstado);
+          
+          toast.success('Estado actualizado', {
+            description: `El usuario ${estadoPendiente.nombre} ha sido ${estadoTexto} correctamente.`
+          });
+        } else {
+          toast.error('Error al cambiar estado', {
+            description: 'No se pudo cambiar el estado del usuario.'
+          });
+        }
       }
     }
     setIsEstadoAlertOpen(false);
     setEstadoPendiente(null);
-  };
+  }, [estadoPendiente, usuariosList]);
 
   // Solo Coordinador - Los Guardarecursos se crean en el módulo de Registro de Guardarecursos
   const roles = gestionUsuariosService.ROLES_DISPONIBLES;
@@ -168,7 +345,10 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
                       {editingUser ? 'Editar Usuario' : 'Nuevo Usuario'}
                     </DialogTitle>
                     <DialogDescription className="text-xs sm:text-sm">
-                      Configure los datos del usuario administrativo
+                      {editingUser && gestionUsuariosService.isEditingSelf(currentUser, editingUser) 
+                        ? '⚠️ Como Administrador, solo puedes modificar tu número de teléfono'
+                        : 'Configure los datos del usuario administrativo'
+                      }
                     </DialogDescription>
                   </DialogHeader>
                   
@@ -176,7 +356,23 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
                     <form onSubmit={handleSubmitUser} className={formStyles.form}>
                       {/* Información Personal */}
                       <div className={formStyles.section}>
-                        <h3 className={formStyles.sectionTitle}>Información del Coordinador</h3>
+                        <h3 className={formStyles.sectionTitle}>
+                          {editingUser && gestionUsuariosService.isEditingSelf(currentUser, editingUser)
+                            ? 'Mi Información Personal'
+                            : 'Información del Coordinador'
+                          }
+                        </h3>
+
+                        {/* Alert informativo para administradores editándose a sí mismos */}
+                        {editingUser && gestionUsuariosService.isEditingSelf(currentUser, editingUser) && (
+                          <Alert className="mb-4 bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800">
+                            <Info className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                            <AlertDescription className="text-xs text-blue-800 dark:text-blue-300">
+                              Por seguridad, los administradores solo pueden modificar su número de teléfono. 
+                              Los demás campos están bloqueados.
+                            </AlertDescription>
+                          </Alert>
+                        )}
                         
                         <div className={formStyles.grid}>
                           <div className={formStyles.field}>
@@ -188,7 +384,14 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
                               placeholder="Ingrese el nombre"
                               className={formStyles.input}
                               required
+                              readOnly={editingUser && gestionUsuariosService.isEditingSelf(currentUser, editingUser)}
+                              disabled={editingUser && gestionUsuariosService.isEditingSelf(currentUser, editingUser)}
                             />
+                            {editingUser && gestionUsuariosService.isEditingSelf(currentUser, editingUser) && (
+                              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                No puedes modificar tu nombre
+                              </p>
+                            )}
                           </div>
                           
                           <div className={formStyles.field}>
@@ -200,19 +403,42 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
                               placeholder="Ingrese el apellido"
                               className={formStyles.input}
                               required
+                              readOnly={editingUser && gestionUsuariosService.isEditingSelf(currentUser, editingUser)}
+                              disabled={editingUser && gestionUsuariosService.isEditingSelf(currentUser, editingUser)}
                             />
+                            {editingUser && gestionUsuariosService.isEditingSelf(currentUser, editingUser) && (
+                              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                No puedes modificar tu apellido
+                              </p>
+                            )}
                           </div>
 
                           <div className={formStyles.field}>
-                            <Label htmlFor="cedula" className={formStyles.label}>Cédula *</Label>
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <Label htmlFor="dpi" className={formStyles.label}>DPI *</Label>
+                              {!editingUser && dpiDuplicado && (
+                                <span className="text-xs text-red-600 dark:text-red-400 font-medium">DPI duplicado</span>
+                              )}
+                            </div>
                             <Input
-                              id="cedula"
-                              value={userForm.cedula}
-                              onChange={(e) => setUserForm({...userForm, cedula: e.target.value})}
-                              placeholder="0000-00000-0000"
-                              className={formStyles.input}
+                              id="dpi"
+                              value={userForm.dpi}
+                              onChange={(e) => {
+                                const newDpi = e.target.value;
+                                setUserForm({...userForm, dpi: newDpi});
+                                verificarDpiDuplicado(newDpi);
+                              }}
+                              placeholder="0000 00000 0000"
+                              className={`${formStyles.input} ${!editingUser && dpiDuplicado ? 'border-red-500 dark:border-red-500 focus:ring-red-500' : ''}`}
                               required
+                              readOnly={!!editingUser}
+                              disabled={!!editingUser}
                             />
+                            {!editingUser && dpiDuplicado && (
+                              <p className="text-xs text-red-600 dark:text-red-400 mt-1">
+                                Este número de DPI ya está en uso por otro usuario del sistema.
+                              </p>
+                            )}
                           </div>
                           
                           <div className={formStyles.field}>
@@ -225,19 +451,40 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
                               className={formStyles.input}
                               required
                             />
+                            {editingUser && gestionUsuariosService.isEditingSelf(currentUser, editingUser) && (
+                              <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                                ✓ Este es el único campo que puedes modificar
+                              </p>
+                            )}
                           </div>
 
                           <div className={formStyles.fieldFullWidth}>
-                            <Label htmlFor="email" className={formStyles.label}>Correo Electrónico *</Label>
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <Label htmlFor="email" className={formStyles.label}>Correo Electrónico *</Label>
+                              {!editingUser && correoDuplicado && (
+                                <span className="text-xs text-red-600 dark:text-red-400 font-medium">Correo duplicado</span>
+                              )}
+                            </div>
                             <Input
                               id="email"
                               type="email"
                               value={userForm.email}
-                              onChange={(e) => setUserForm({...userForm, email: e.target.value})}
+                              onChange={(e) => {
+                                const newEmail = e.target.value;
+                                setUserForm({...userForm, email: newEmail});
+                                verificarCorreoDuplicado(newEmail);
+                              }}
                               placeholder="correo@ejemplo.com"
-                              className={formStyles.input}
+                              className={`${formStyles.input} ${!editingUser && correoDuplicado ? 'border-red-500 dark:border-red-500 focus:ring-red-500' : ''}`}
                               required
+                              readOnly={!!editingUser}
+                              disabled={!!editingUser}
                             />
+                            {!editingUser && correoDuplicado && (
+                              <p className="text-xs text-red-600 dark:text-red-400 mt-1">
+                                Este correo electrónico ya está en uso por otro usuario del sistema.
+                              </p>
+                            )}
                           </div>
                           
                           {!editingUser && (
@@ -248,11 +495,15 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
                                   id="password"
                                   type={showPassword ? "text" : "password"}
                                   value={userForm.password}
-                                  onChange={(e) => setUserForm({...userForm, password: e.target.value})}
+                                  onChange={(e) => {
+                                    const newPassword = e.target.value;
+                                    setUserForm({...userForm, password: newPassword});
+                                    const validation = isValidSecurePassword(newPassword);
+                                    setPasswordErrors(validation.errors);
+                                  }}
                                   placeholder="Ingrese la contraseña"
-                                  className={formStyles.inputPassword}
+                                  className={`${formStyles.inputPassword} ${passwordErrors.length > 0 && userForm.password ? 'border-red-500 dark:border-red-500' : ''}`}
                                   required
-                                  minLength={6}
                                 />
                                 <button
                                   type="button"
@@ -262,9 +513,25 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
                                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                                 </button>
                               </div>
-                              <p className="text-xs text-muted-foreground">
-                                Mínimo 6 caracteres. Esta será la contraseña de acceso al sistema.
-                              </p>
+                              <div className="mt-2 space-y-1">
+                                <p className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                                  Requisitos de seguridad:
+                                </p>
+                                <ul className="text-xs space-y-0.5">
+                                  <li className={userForm.password.length >= 8 ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+                                    {userForm.password.length >= 8 ? '✓' : '○'} Mínimo 8 caracteres
+                                  </li>
+                                  <li className={/[0-9]/.test(userForm.password) ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+                                    {/[0-9]/.test(userForm.password) ? '✓' : '○'} Al menos un número
+                                  </li>
+                                  <li className={/[A-Z]/.test(userForm.password) ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+                                    {/[A-Z]/.test(userForm.password) ? '✓' : '○'} Al menos una mayúscula
+                                  </li>
+                                  <li className={/[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(userForm.password) ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+                                    {/[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(userForm.password) ? '✓' : '○'} Al menos un carácter especial
+                                  </li>
+                                </ul>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -286,6 +553,7 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
                       type="submit"
                       onClick={handleSubmitUser}
                       className={buttonStyles.createButton}
+                      disabled={!editingUser && (dpiDuplicado || correoDuplicado || passwordErrors.length > 0)}
                     >
                       {editingUser ? (
                         <>
@@ -306,7 +574,18 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
 
       {/* Vista de cards para móvil - visible solo en pantallas pequeñas */}
       <div className="md:hidden space-y-3">
-        {filteredUsers.length === 0 ? (
+        {loading ? (
+          <Card>
+            <CardContent className="p-8 text-center">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="h-8 w-8 text-gray-400 animate-spin" />
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Cargando usuarios...
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        ) : filteredUsers.length === 0 ? (
           <Card>
             <CardContent className="p-8 text-center">
               <div className="flex flex-col items-center gap-3">
@@ -481,7 +760,37 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredUsers.map((usuario) => (
+                  {loading ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center py-8">
+                        <div className="flex flex-col items-center gap-3">
+                          <Loader2 className="h-8 w-8 text-gray-400 animate-spin" />
+                          <p className="text-sm text-gray-500 dark:text-gray-400">
+                            Cargando usuarios...
+                          </p>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : filteredUsers.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center py-8">
+                        <div className="flex flex-col items-center gap-3">
+                          <div className="w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
+                            <Users className="h-8 w-8 text-gray-400" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-900 dark:text-gray-100 mb-1">
+                              No se encontraron usuarios
+                            </p>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                              Intenta ajustar los filtros de búsqueda
+                            </p>
+                          </div>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredUsers.map((usuario) => (
                     <TableRow key={usuario.id} className={tableStyles.row}>
                       <TableCell className={tableStyles.cell}>
                         <div className={tableStyles.userInfo.container}>
@@ -595,17 +904,10 @@ export function GestionUsuarios({ userPermissions, currentUser }: GestionUsuario
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
+                  )))}
                 </TableBody>
               </Table>
             </div>
-            
-            {filteredUsers.length === 0 && (
-              <div className="text-center py-12 text-muted-foreground">
-                <Users className="h-16 w-16 mx-auto mb-4 opacity-30" />
-                <p>No se encontraron usuarios que coincidan con los filtros</p>
-              </div>
-            )}
           </CardContent>
         </Card>
       </div>

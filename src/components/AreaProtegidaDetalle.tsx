@@ -3,6 +3,7 @@ import { Card, CardContent } from './ui/card';
 import { MapPin, Leaf, TreePine } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cardStyles, textStyles, areaDetalleStyles } from '../styles/shared-styles';
+import { GoogleMap, Marker, useJsApiLoader } from '@react-google-maps/api';
 
 interface AreaProtegidaDetalleProps {
   area: AreaProtegida | null;
@@ -11,9 +12,18 @@ interface AreaProtegidaDetalleProps {
 }
 
 export function AreaProtegidaDetalle({ area, isSimplified = false, allAreas = [] }: AreaProtegidaDetalleProps) {
+  // Cargar Google Maps API
+  const { isLoaded } = useJsApiLoader({
+    googleMapsApiKey: 'AIzaSyC1XVfrE8CmVg3nhd-6Sps087JmARuSNWc',
+  });
+
   if (!area) {
     return null;
   }
+
+  // Configuración del mapa centrado en el área
+  const mapContainerStyle = { width: '100%', height: '100%' };
+  const center = { lat: area.coordenadas.lat, lng: area.coordenadas.lng };
 
   return (
     <div className={areaDetalleStyles.container}>
@@ -38,24 +48,53 @@ export function AreaProtegidaDetalle({ area, isSimplified = false, allAreas = []
 
       {/* Grid: Mapa decorativo + Cards de información */}
       <div className={areaDetalleStyles.grid}>
-        {/* Mapa decorativo minimalista */}
+        {/* Mapa de Google Maps */}
         <motion.div 
           className={areaDetalleStyles.mapContainer}
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: 0.2 }}
         >
-          {/* Círculos concéntricos decorativos */}
-          <div className={areaDetalleStyles.mapCircles}>
-            {/* Círculo exterior (línea punteada) */}
-            <div className={areaDetalleStyles.circleOuter} />
-            
-            {/* Círculo medio */}
-            <div className={areaDetalleStyles.circleMiddle} />
-            
-            {/* Punto central */}
-            <div className={areaDetalleStyles.circleCenterPoint} />
-          </div>
+          {isLoaded ? (
+            <GoogleMap
+              mapContainerStyle={mapContainerStyle}
+              center={center}
+              zoom={12}
+              options={{ 
+                mapTypeControl: false, 
+                streetViewControl: false,
+                fullscreenControl: false,
+                zoomControl: true,
+                styles: [
+                  {
+                    featureType: 'poi',
+                    elementType: 'labels',
+                    stylers: [{ visibility: 'off' }]
+                  }
+                ]
+              }}
+            >
+              <Marker
+                position={center}
+                icon={{
+                  path: window.google.maps.SymbolPath.CIRCLE,
+                  fillColor: '#dc2626',
+                  fillOpacity: 1,
+                  strokeColor: '#ffffff',
+                  strokeWeight: 3,
+                  scale: 12,
+                }}
+                title={area.nombre}
+              />
+            </GoogleMap>
+          ) : (
+            <div className="flex items-center justify-center h-full bg-green-50 dark:bg-green-950/20 rounded-lg">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-green-600 dark:border-green-400 mx-auto mb-2"></div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Cargando mapa...</p>
+              </div>
+            </div>
+          )}
         </motion.div>
 
         {/* Columna de información */}

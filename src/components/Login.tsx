@@ -6,10 +6,13 @@ import { Label } from './ui/label';
 import { Alert, AlertDescription } from './ui/alert';
 import { Eye, EyeOff } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
+import { SupabaseSetupHelper } from './SupabaseSetupHelper';
+import { InitDataBanner } from './InitDataBanner';
 import conapLogo from 'figma:asset/fdba91156d85a5c8ad358d0ec261b66438776557.png';
 import { motion, AnimatePresence } from 'motion/react';
 import { loginStyles } from '../styles/shared-styles';
 import { authService } from '../utils/authService';
+import { projectId, publicAnonKey } from '../utils/supabase/info';
 
 interface LoginProps {
   onLogin: (authResult: { user: any; token: string }) => void;
@@ -30,6 +33,28 @@ export function Login({ onLogin }: LoginProps) {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [showSetupHelper, setShowSetupHelper] = useState(false);
+  const [showInitDataBanner, setShowInitDataBanner] = useState(false);
+  const [isCheckingInitData, setIsCheckingInitData] = useState(true);
+
+  // Limpiar TODOS los datos cuando se monta el componente Login
+  useEffect(() => {
+    const cleanAllData = async () => {
+      try {
+        console.log('🧹 Login montado - Limpiando TODOS los datos y caché...');
+        await authService.clearAllData();
+        console.log('✅ Datos y caché limpiados en Login');
+      } catch (error) {
+        console.error('❌ Error al limpiar datos en Login:', error);
+        // Fallback
+        localStorage.clear();
+        sessionStorage.clear();
+      }
+    };
+    
+    cleanAllData();
+    checkInitData();
+  }, []);
 
   // Cambiar imagen cada 5 segundos
   useEffect(() => {
@@ -40,14 +65,75 @@ export function Login({ onLogin }: LoginProps) {
     return () => clearInterval(interval);
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  /**
+   * Verifica si los datos base (Estados y Roles) están inicializados
+   */
+  const checkInitData = async () => {
+    try {
+      setIsCheckingInitData(true);
+      
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/check-init`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      const data = await response.json();
+
+      if (data.success && !data.initialized) {
+        // Datos base no inicializados, mostrar banner
+        setShowInitDataBanner(true);
+      }
+    } catch (err) {
+      console.error('Error al verificar datos base:', err);
+      // En caso de error de conexión, no mostrar el banner
+      // El usuario podrá intentar hacer login y verá el error ahí
+    } finally {
+      setIsCheckingInitData(false);
+    }
+  };
+
+  /**
+   * Callback cuando los datos son inicializados exitosamente
+   */
+  const handleDataInitialized = () => {
+    setShowInitDataBanner(false);
+    // Opcionalmente, podrías recargar la página o mostrar un mensaje
+    setTimeout(() => {
+      window.location.reload();
+    }, 1500);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
 
-    // Simulación de llamada al servidor
-    setTimeout(() => {
-      const result = authService.authenticate(email, password);
+    try {
+      // 🔒 VALIDACIÓN DE SEGURIDAD: Sanitizar email antes de enviar
+      const sanitizedEmail = email.toLowerCase().trim();
+      
+      // 🔒 VALIDACIÓN DE SEGURIDAD: Verificar formato de email
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(sanitizedEmail)) {
+        setError('Formato de email inválido');
+        setIsLoading(false);
+        return;
+      }
+
+      // 🔒 VALIDACIÓN DE SEGURIDAD: Limitar longitud
+      if (sanitizedEmail.length > 255 || password.length > 255) {
+        setError('Credenciales inválidas');
+        setIsLoading(false);
+        return;
+      }
+
+      // Autenticación con Supabase
+      const result = await authService.authenticate(sanitizedEmail, password);
       
       if (result.success && result.user && result.token) {
         // Pasar tanto el usuario como el token a App.tsx
@@ -56,15 +142,48 @@ export function Login({ onLogin }: LoginProps) {
           token: result.token
         });
       } else {
-        setError(result.error || 'Error de autenticación');
+        // Verificar si es un error por falta de datos base
+        const isInitDataError = result.error?.includes('datos base') ||
+                               result.error?.includes('inicializado') ||
+                               result.error?.includes('Estado Activo') ||
+                               result.error?.includes('Rol no encontrado');
+        
+        if (isInitDataError) {
+          setShowInitDataBanner(true);
+          setError('Los datos base no han sido inicializados. Por favor, use el botón de arriba para inicializarlos.');
+        } else {
+          // Verificar si es un error de configuración de Supabase
+          const isSetupError = result.error?.includes('Base de datos no configurada') ||
+                              result.error?.includes('relation') ||
+                              result.error?.includes('does not exist') ||
+                              result.error?.includes('Usuario no encontrado en la base de datos');
+          
+          if (isSetupError) {
+            setShowSetupHelper(true);
+          }
+          
+          setError(result.error || 'Error de autenticación');
+        }
       }
-      
+    } catch (err) {
+      console.error('Error en login:', err);
+      setError('Error de conexión. Intente nuevamente.');
+    } finally {
       setIsLoading(false);
-    }, 800);
+    }
   };
+
+  // Si hay error de configuración, mostrar el helper
+  if (showSetupHelper) {
+    return <SupabaseSetupHelper error={error} />;
+  }
 
   return (
     <div className={loginStyles.container}>
+      {/* Banner de inicialización de datos base */}
+      {showInitDataBanner && (
+        <InitDataBanner onDataInitialized={handleDataInitialized} />
+      )}
       {/* Toggle de tema en la esquina superior derecha - Touch-friendly */}
       <motion.div
         initial={{ opacity: 0, scale: 0.9 }}

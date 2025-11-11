@@ -9,7 +9,6 @@
 
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { areasProtegidas } from '../data/mock-data';
 import { actividadesSync } from './actividadesSync';
 import { Actividad } from '../types';
 
@@ -295,11 +294,15 @@ function agregarFooter(doc: jsPDF, totalActividades: number): void {
 
 /**
  * Genera el reporte mensual de actividades en PDF
+ * @param guardarecurso - Datos del guardarecurso
+ * @param areaNombre - Nombre del área protegida asignada (desde base de datos)
  */
-export function generarReporteActividadesMensual(guardarecurso: GuardarecursoData): ReporteResult {
+export function generarReporteActividadesMensual(
+  guardarecurso: GuardarecursoData, 
+  areaNombre: string = 'No asignada'
+): ReporteResult {
   try {
     // Obtener datos
-    const area = areasProtegidas.find(a => a.id === guardarecurso.areaAsignada);
     const año = new Date().getFullYear();
     
     // Obtener y procesar actividades
@@ -312,7 +315,7 @@ export function generarReporteActividadesMensual(guardarecurso: GuardarecursoDat
     
     // Agregar secciones
     agregarEncabezado(doc);
-    agregarInformacionGuardarecurso(doc, guardarecurso, area?.nombre || 'No asignada', año);
+    agregarInformacionGuardarecurso(doc, guardarecurso, areaNombre, año);
     agregarTitulo(doc, año);
     agregarTabla(doc, tableData);
     agregarFooter(doc, actividadesGuardarecurso.length);

@@ -4,10 +4,14 @@
  * Servicio centralizado que maneja toda la lógica funcional del módulo de Áreas Protegidas,
  * separando la lógica de negocio de la presentación.
  * 
+ * OPTIMIZADO: Cache de peticiones, reducción de consultas redundantes
+ * 
  * @module utils/areasProtegidasService
  */
 
 import { AreaProtegida, Guardarecurso } from '../types';
+import { projectId } from './supabase/info';
+import { getRequiredAuthToken } from './base-api-service';
 
 /**
  * Interface para los datos del formulario de áreas protegidas
@@ -69,6 +73,8 @@ export const ECOSISTEMAS_GUATEMALA = [
   'Karst'
 ] as const;
 
+// ===== FUNCIONES DE FILTRADO =====
+
 /**
  * Filtra áreas protegidas excluyendo desactivadas
  * 
@@ -101,6 +107,8 @@ export function filterAreasProtegidas(
     return isActive && matchSearch && matchDepartamento;
   });
 }
+
+// ===== FUNCIONES DE CREACIÓN Y ACTUALIZACIÓN =====
 
 /**
  * Crea una nueva área protegida con valores predeterminados
@@ -153,9 +161,11 @@ export function updateAreaProtegida(
   };
 }
 
+// ===== FUNCIONES DE VALIDACIÓN =====
+
 /**
  * Valida si un área puede ser desactivada
- * Verifica que no tenga guardarecursos asignados
+ * Verifica que no tenga guardarecursos activos o suspendidos asignados
  * 
  * @param area - Área a validar
  * @param guardarecursos - Lista de todos los guardarecursos
@@ -171,7 +181,11 @@ export function validateAreaDeactivation(
   area: AreaProtegida,
   guardarecursos: Guardarecurso[]
 ): ValidationResult {
-  const guardarecursosAsignados = guardarecursos.filter(g => g.areaAsignada === area.id);
+  // Solo contar guardarecursos activos o suspendidos, NO desactivados
+  const guardarecursosAsignados = guardarecursos.filter(g => 
+    g.areaAsignada === area.id && 
+    (g.estado === 'Activo' || g.estado === 'Suspendido')
+  );
   
   if (guardarecursosAsignados.length > 0) {
     return {
@@ -204,6 +218,8 @@ export function isValidEstadoChange(
 ): boolean {
   return estadoActual !== nuevoEstado;
 }
+
+// ===== FUNCIONES DE ESTADO =====
 
 /**
  * Determina el nuevo estado al hacer toggle
@@ -281,6 +297,8 @@ export function prepareEstadoPendiente(
   };
 }
 
+// ===== FUNCIONES DE MAPA =====
+
 /**
  * Calcula coordenadas para el mapa SVG
  * 
@@ -330,6 +348,8 @@ export function calculateCenteredViewBox(
 export function getDefaultViewBox(): string {
   return "0 0 800 600";
 }
+
+// ===== FUNCIONES DE UTILIDADES =====
 
 /**
  * Obtiene el número de guardarecursos asignados a un área
@@ -391,11 +411,310 @@ export function areaToFormData(
   };
 }
 
+// ===== CACHE DE PETICIONES (OPTIMIZACIÓN) =====
+
+/**
+ * Cache simple para la última petición de áreas protegidas
+ * Reduce peticiones innecesarias al backend
+ */
+let areasProtegidasCache: {
+  data: AreaProtegida[] | null;
+  timestamp: number | null;
+  ttl: number; // Time to live en milisegundos
+} = {
+  data: null,
+  timestamp: null,
+  ttl: 30000 // 30 segundos
+};
+
+/**
+ * Limpia el cache de áreas protegidas
+ * Útil después de crear/actualizar/eliminar un área
+ */
+export function clearAreasProtegidasCache(): void {
+  areasProtegidasCache.data = null;
+  areasProtegidasCache.timestamp = null;
+  console.log('🧹 Cache de áreas protegidas limpiado');
+}
+
+/**
+ * Verifica si el cache es válido
+ */
+function isCacheValid(): boolean {
+  if (!areasProtegidasCache.data || !areasProtegidasCache.timestamp) {
+    return false;
+  }
+  const now = Date.now();
+  return (now - areasProtegidasCache.timestamp) < areasProtegidasCache.ttl;
+}
+
+// ===== API CALLS (OPTIMIZADAS) =====
+
+/**
+ * Obtiene todas las áreas protegidas desde el backend
+ * OPTIMIZADO: Usa cache para reducir peticiones redundantes
+ */
+export async function fetchAreasProtegidas(forceRefresh: boolean = false): Promise<AreaProtegida[]> {
+  try {
+    // Si tenemos cache válido y no es refresh forzado, retornar del cache
+    if (!forceRefresh && isCacheValid() && areasProtegidasCache.data) {
+      console.log('✅ Usando áreas protegidas desde cache');
+      return areasProtegidasCache.data;
+    }
+
+    console.log('📡 Consultando áreas protegidas desde backend...');
+    const token = getRequiredAuthToken();
+    const response = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/areas`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = errorData.error || 'Error al obtener áreas protegidas';
+      console.error('❌ Error del servidor:', errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      const errorMessage = data.error || 'Error al obtener áreas protegidas';
+      console.error('❌ Error del servidor:', errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    // Si no hay áreas, retornar array vacío en lugar de lanzar error
+    if (!data.areas || data.areas.length === 0) {
+      console.warn('⚠️ No hay áreas protegidas en la base de datos');
+      return [];
+    }
+
+    // Mapear datos del backend al formato del frontend
+    const areas = data.areas.map((a: any) => ({
+      id: a.ar_id.toString(),
+      nombre: a.ar_nombre,
+      departamento: a.departamento?.dpt_nombre || 'Desconocido',
+      extension: a.ar_extension || 0,
+      fechaCreacion: a.created_at ? a.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+      coordenadas: {
+        lat: a.ar_latitud || 0,
+        lng: a.ar_longitud || 0
+      },
+      descripcion: a.ar_descripcion || '',
+      ecosistemas: a.ecosistema?.ecs_nombre ? [a.ecosistema.ecs_nombre] : ['Bosque Tropical Húmedo'],
+      estado: a.estado?.std_nombre as 'Activo' | 'Desactivado',
+      guardarecursos: []
+    }));
+
+    // Guardar en cache
+    areasProtegidasCache.data = areas;
+    areasProtegidasCache.timestamp = Date.now();
+    
+    console.log(`✅ ${areas.length} áreas protegidas cargadas y cacheadas`);
+    return areas;
+  } catch (error) {
+    console.error('❌ Error en fetchAreasProtegidas:', error);
+    throw error;
+  }
+}
+
+/**
+ * Crea una nueva área protegida en el backend
+ * OPTIMIZADO: Limpia cache automáticamente
+ */
+export async function createAreaProtegidaAPI(formData: AreaProtegidaFormData): Promise<AreaProtegida> {
+  try {
+    const token = getRequiredAuthToken();
+    const response = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/areas`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          nombre: formData.nombre,
+          departamento: formData.departamento,
+          extension: formData.extension,
+          fechaCreacion: formData.fechaCreacion,
+          lat: formData.coordenadas.lat,
+          lng: formData.coordenadas.lng,
+          descripcion: formData.descripcion,
+          ecosistemas: formData.ecosistemas
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Error al crear área protegida');
+    }
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Error al crear área protegida');
+    }
+
+    const area = data.area;
+
+    // Limpiar cache
+    clearAreasProtegidasCache();
+
+    // Mapear respuesta al formato del frontend
+    return {
+      id: area.ar_id.toString(),
+      nombre: area.ar_nombre,
+      departamento: area.departamento?.dpt_nombre || 'Desconocido',
+      extension: area.ar_extension || 0,
+      fechaCreacion: area.created_at ? area.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+      coordenadas: {
+        lat: area.ar_latitud || 0,
+        lng: area.ar_longitud || 0
+      },
+      descripcion: area.ar_descripcion || '',
+      ecosistemas: area.ecosistema?.ecs_nombre ? [area.ecosistema.ecs_nombre] : ['Bosque Tropical Húmedo'],
+      estado: 'Activo',
+      guardarecursos: []
+    };
+  } catch (error) {
+    console.error('❌ Error en createAreaProtegidaAPI:', error);
+    throw error;
+  }
+}
+
+/**
+ * Actualiza un área protegida existente en el backend
+ * OPTIMIZADO: Limpia cache automáticamente
+ */
+export async function updateAreaProtegidaAPI(
+  id: string,
+  formData: AreaProtegidaFormData
+): Promise<AreaProtegida> {
+  try {
+    const token = getRequiredAuthToken();
+    const response = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/areas/${id}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          nombre: formData.nombre,
+          departamento: formData.departamento,
+          extension: formData.extension,
+          fechaCreacion: formData.fechaCreacion,
+          lat: formData.coordenadas.lat,
+          lng: formData.coordenadas.lng,
+          descripcion: formData.descripcion,
+          ecosistemas: formData.ecosistemas
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Error al actualizar área protegida');
+    }
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Error al actualizar área protegida');
+    }
+
+    const area = data.area;
+
+    // Limpiar cache
+    clearAreasProtegidasCache();
+
+    return {
+      id: area.ar_id.toString(),
+      nombre: area.ar_nombre,
+      departamento: area.departamento?.dpt_nombre || 'Desconocido',
+      extension: area.ar_extension || 0,
+      fechaCreacion: area.created_at ? area.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+      coordenadas: {
+        lat: area.ar_latitud || 0,
+        lng: area.ar_longitud || 0
+      },
+      descripcion: area.ar_descripcion || '',
+      ecosistemas: area.ecosistema?.ecs_nombre ? [area.ecosistema.ecs_nombre] : ['Bosque Tropical Húmedo'],
+      estado: area.estado?.std_nombre as 'Activo' | 'Desactivado',
+      guardarecursos: []
+    };
+  } catch (error) {
+    console.error('❌ Error en updateAreaProtegidaAPI:', error);
+    throw error;
+  }
+}
+
+/**
+ * Cambia el estado de un área protegida en el backend
+ * OPTIMIZADO: Limpia cache automáticamente
+ */
+export async function cambiarEstadoAreaAPI(
+  id: string,
+  nuevoEstado: 'Activo' | 'Desactivado'
+): Promise<void> {
+  try {
+    const token = getRequiredAuthToken();
+    const response = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/make-server-276018ed/areas/${id}/estado`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ nuevoEstado })
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Error al cambiar estado');
+    }
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Error al cambiar estado');
+    }
+
+    // Limpiar cache
+    clearAreasProtegidasCache();
+  } catch (error) {
+    console.error('❌ Error en cambiarEstadoAreaAPI:', error);
+    throw error;
+  }
+}
+
 /**
  * Servicio principal de Áreas Protegidas
  * Agrupa todas las funcionalidades en un objeto cohesivo
  */
 export const areasProtegidasService = {
+  // API Calls
+  fetchAreasProtegidas,
+  fetchAreas: fetchAreasProtegidas, // Alias para compatibilidad con otros servicios
+  createAreaProtegidaAPI,
+  updateAreaProtegidaAPI,
+  cambiarEstadoAreaAPI,
+  
+  // Cache
+  clearAreasProtegidasCache,
+  
   // Constantes
   departamentos: DEPARTAMENTOS_GUATEMALA,
   ecosistemas: ECOSISTEMAS_GUATEMALA,

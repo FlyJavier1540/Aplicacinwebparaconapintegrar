@@ -1,11 +1,13 @@
 /**
  * Opciones centralizadas para componentes Select
  * Mantiene consistencia en todas las listas desplegables de la aplicación
+ * 
+ * OPTIMIZACIÓN: Ya no usa mock-data, recibe datos desde base de datos vía props
  */
 
 import { SelectItem } from '../components/ui/select';
-import { guardarecursos, areasProtegidas } from '../data/mock-data';
 import { ESTADOS_ACTIVIDAD, ESTADOS_INCIDENTE, NIVELES_GRAVEDAD, NIVELES_PRIORIDAD, TIPOS_ACTIVIDAD } from './constants';
+import { AreaProtegida, Guardarecurso } from '../types';
 
 // ============================================================================
 // HELPER FUNCTIONS - Renderizado de opciones
@@ -271,11 +273,11 @@ export const PeriodoOptions = () => (
 // ============================================================================
 
 /**
- * Opciones de áreas protegidas (desde mock-data)
+ * Opciones de áreas protegidas (desde base de datos)
  */
-export const AreasProtegidasOptions = () => (
+export const AreasProtegidasOptions = ({ areas }: { areas: AreaProtegida[] }) => (
   <>
-    {areasProtegidas.map(area => (
+    {areas.map(area => (
       <SelectItem key={area.id} value={area.id}>
         {area.nombre}
       </SelectItem>
@@ -286,20 +288,26 @@ export const AreasProtegidasOptions = () => (
 /**
  * Opciones de áreas protegidas con "Todas" (filtro general)
  */
-export const AreasProtegidasOptionsWithAll = ({ label = 'Todas las áreas' }: { label?: string } = {}) => (
+export const AreasProtegidasOptionsWithAll = ({ 
+  areas, 
+  label = 'Todas las áreas' 
+}: { 
+  areas: AreaProtegida[]; 
+  label?: string;
+}) => (
   <>
     <SelectItem value="todos">{label}</SelectItem>
-    <AreasProtegidasOptions />
+    <AreasProtegidasOptions areas={areas} />
   </>
 );
 
 /**
  * Opciones de áreas protegidas con "all" como valor (para filtros legacy)
  */
-export const AreasProtegidasOptionsWithAllLegacy = () => (
+export const AreasProtegidasOptionsWithAllLegacy = ({ areas }: { areas: AreaProtegida[] }) => (
   <>
     <SelectItem value="all">Todas las áreas</SelectItem>
-    <AreasProtegidasOptions />
+    <AreasProtegidasOptions areas={areas} />
   </>
 );
 
@@ -308,9 +316,9 @@ export const AreasProtegidasOptionsWithAllLegacy = () => (
 // ============================================================================
 
 /**
- * Opciones de guardarecursos (desde mock-data)
+ * Opciones de guardarecursos (desde base de datos)
  */
-export const GuardarecursosOptions = () => (
+export const GuardarecursosOptions = ({ guardarecursos }: { guardarecursos: Guardarecurso[] }) => (
   <>
     {guardarecursos.map(g => (
       <SelectItem key={g.id} value={g.id}>
@@ -323,20 +331,32 @@ export const GuardarecursosOptions = () => (
 /**
  * Opciones de guardarecursos con "Todos"
  */
-export const GuardarecursosOptionsWithAll = ({ label = 'Todos los guardarecursos' }: { label?: string } = {}) => (
+export const GuardarecursosOptionsWithAll = ({ 
+  guardarecursos, 
+  label = 'Todos los guardarecursos' 
+}: { 
+  guardarecursos: Guardarecurso[]; 
+  label?: string;
+}) => (
   <>
     <SelectItem value="todos">{label}</SelectItem>
-    <GuardarecursosOptions />
+    <GuardarecursosOptions guardarecursos={guardarecursos} />
   </>
 );
 
 /**
  * Opciones de guardarecursos con información de área asignada
  */
-export const GuardarecursosOptionsWithArea = () => (
+export const GuardarecursosOptionsWithArea = ({ 
+  guardarecursos, 
+  areas 
+}: { 
+  guardarecursos: Guardarecurso[]; 
+  areas: AreaProtegida[];
+}) => (
   <>
     {guardarecursos.map(g => {
-      const area = areasProtegidas.find(a => a.id === g.areaAsignada);
+      const area = areas.find(a => a.id === g.areaAsignada);
       return (
         <SelectItem key={g.id} value={g.id}>
           {g.nombre} {g.apellido} - {area?.nombre || 'Sin área asignada'}
@@ -358,30 +378,35 @@ export const GuardarecursoNoneOption = ({ label = 'Sin asignar' }: { label?: str
 // ============================================================================
 
 /**
- * Lista de departamentos de Guatemala extraídos de áreas protegidas
+ * Extrae lista de departamentos únicos de áreas protegidas
  */
-export const departamentos = Array.from(new Set(areasProtegidas.map(a => a.departamento))).sort();
+export const getDepartamentos = (areas: AreaProtegida[]): string[] => {
+  return Array.from(new Set(areas.map(a => a.departamento))).sort();
+};
 
 /**
  * Opciones de departamentos
  */
-export const DepartamentosOptions = () => (
-  <>
-    {departamentos.map(dep => (
-      <SelectItem key={dep} value={dep}>
-        {dep}
-      </SelectItem>
-    ))}
-  </>
-);
+export const DepartamentosOptions = ({ areas }: { areas: AreaProtegida[] }) => {
+  const departamentos = getDepartamentos(areas);
+  return (
+    <>
+      {departamentos.map(dep => (
+        <SelectItem key={dep} value={dep}>
+          {dep}
+        </SelectItem>
+      ))}
+    </>
+  );
+};
 
 /**
  * Opciones de departamentos con "Todos"
  */
-export const DepartamentosOptionsWithAll = () => (
+export const DepartamentosOptionsWithAll = ({ areas }: { areas: AreaProtegida[] }) => (
   <>
     <SelectItem value="todos">Todos los departamentos</SelectItem>
-    <DepartamentosOptions />
+    <DepartamentosOptions areas={areas} />
   </>
 );
 
@@ -390,24 +415,29 @@ export const DepartamentosOptionsWithAll = () => (
 // ============================================================================
 
 /**
- * Lista de ecosistemas únicos extraídos de áreas protegidas
+ * Extrae lista de ecosistemas únicos de áreas protegidas
  */
-export const ecosistemas = Array.from(
-  new Set(areasProtegidas.flatMap(a => a.ecosistemas))
-).sort();
+export const getEcosistemas = (areas: AreaProtegida[]): string[] => {
+  return Array.from(
+    new Set(areas.flatMap(a => a.ecosistemas))
+  ).sort();
+};
 
 /**
  * Opciones de ecosistemas
  */
-export const EcosistemasOptions = () => (
-  <>
-    {ecosistemas.map(eco => (
-      <SelectItem key={eco} value={eco}>
-        {eco}
-      </SelectItem>
-    ))}
-  </>
-);
+export const EcosistemasOptions = ({ areas }: { areas: AreaProtegida[] }) => {
+  const ecosistemas = getEcosistemas(areas);
+  return (
+    <>
+      {ecosistemas.map(eco => (
+        <SelectItem key={eco} value={eco}>
+          {eco}
+        </SelectItem>
+      ))}
+    </>
+  );
+};
 
 // ============================================================================
 // HELPER FUNCTIONS AVANZADAS
@@ -416,7 +446,13 @@ export const EcosistemasOptions = () => (
 /**
  * Filtra guardarecursos por área y renderiza opciones
  */
-export const GuardarecursosByAreaOptions = ({ areaId }: { areaId?: string }) => {
+export const GuardarecursosByAreaOptions = ({ 
+  guardarecursos, 
+  areaId 
+}: { 
+  guardarecursos: Guardarecurso[]; 
+  areaId?: string;
+}) => {
   const filtered = areaId 
     ? guardarecursos.filter(g => g.areaAsignada === areaId)
     : guardarecursos;

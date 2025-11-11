@@ -18,6 +18,54 @@ export function isValidPassword(password: string, minLength: number = 6): boolea
 }
 
 /**
+ * Valida que una contraseña cumpla las políticas de seguridad estrictas
+ * - Mínimo 8 caracteres
+ * - Al menos un número
+ * - Al menos una letra mayúscula
+ * - Al menos un carácter especial (!@#$%^&*()_+-=[]{}|;:,.<>?)
+ */
+export function isValidSecurePassword(password: string): { 
+  isValid: boolean; 
+  errors: string[];
+  requirements: Array<{ label: string; met: boolean }>;
+} {
+  const errors: string[] = [];
+  const hasMinLength = password.length >= 8;
+  const hasNumber = /[0-9]/.test(password);
+  const hasUppercase = /[A-Z]/.test(password);
+  const hasSpecialChar = /[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(password);
+  
+  if (!hasMinLength) {
+    errors.push('La contraseña debe tener al menos 8 caracteres');
+  }
+  
+  if (!hasNumber) {
+    errors.push('La contraseña debe contener al menos un número');
+  }
+  
+  if (!hasUppercase) {
+    errors.push('La contraseña debe contener al menos una letra mayúscula');
+  }
+  
+  if (!hasSpecialChar) {
+    errors.push('La contraseña debe contener al menos un carácter especial (!@#$%^&*()_+-=[]{}|;:,.<>?)');
+  }
+  
+  const requirements = [
+    { label: 'Mínimo 8 caracteres', met: hasMinLength },
+    { label: 'Al menos un número', met: hasNumber },
+    { label: 'Al menos una mayúscula', met: hasUppercase },
+    { label: 'Al menos un carácter especial', met: hasSpecialChar }
+  ];
+  
+  return {
+    isValid: errors.length === 0,
+    errors,
+    requirements
+  };
+}
+
+/**
  * Valida que un DPI guatemalteco sea válido
  */
 export function isValidDPI(dpi: string): boolean {

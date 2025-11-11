@@ -1,13 +1,14 @@
-import { useState } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Alert, AlertDescription } from './ui/alert';
-import { Lock, Eye, EyeOff, User, Shield } from 'lucide-react';
+import { Lock, Eye, EyeOff, User, Shield, Check, X } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { passwordFormStyles } from '../styles/shared-styles';
 import { authService } from '../utils/authService';
+import { isValidSecurePassword } from '../utils/validators';
 
 interface CambiarContrasenaProps {
   isOpen: boolean;
@@ -15,6 +16,10 @@ interface CambiarContrasenaProps {
   currentUser: any;
 }
 
+/**
+ * Componente para cambiar la contraseña del usuario actual
+ * OPTIMIZACIÓN: Handlers memoizados con useCallback
+ */
 export function CambiarContrasena({ isOpen, onClose, currentUser }: CambiarContrasenaProps) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -24,42 +29,67 @@ export function CambiarContrasena({ isOpen, onClose, currentUser }: CambiarContr
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Validación de contraseña en tiempo real
+  const passwordValidation = useMemo(
+    () => isValidSecurePassword(newPassword),
+    [newPassword]
+  );
+
+  // Verificar si se puede enviar el formulario
+  const canSubmit = useMemo(() => {
+    return currentPassword.length > 0 &&
+           passwordValidation.isValid &&
+           newPassword === confirmPassword;
+  }, [currentPassword, passwordValidation.isValid, newPassword, confirmPassword]);
+
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    // Cambiar contraseña usando el servicio
-    const result = authService.changeOwnPassword(
-      currentUser.id,
-      currentPassword,
-      newPassword,
-      confirmPassword
-    );
-
-    if (!result.success) {
-      setError(result.error || 'Error al cambiar la contraseña');
+    // Validar contraseña segura antes de enviar
+    if (!passwordValidation.isValid) {
+      toast.error('Contraseña no cumple los requisitos', {
+        description: passwordValidation.errors[0]
+      });
       return;
     }
 
-    toast.success('Contraseña actualizada', {
-      description: 'Tu contraseña ha sido cambiada exitosamente.'
-    });
+    try {
+      // Cambiar contraseña usando el servicio de Supabase
+      const result = await authService.changeOwnPassword(
+        currentPassword,
+        newPassword,
+        confirmPassword
+      );
 
-    // Limpiar formulario y cerrar
+      if (!result.success) {
+        setError(result.error || 'Error al cambiar la contraseña');
+        return;
+      }
+
+      toast.success('Contraseña actualizada', {
+        description: 'Tu contraseña ha sido cambiada exitosamente.'
+      });
+
+      // Limpiar formulario y cerrar
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setError('');
+      onClose();
+    } catch (err) {
+      console.error('Error al cambiar contraseña:', err);
+      setError('Error inesperado. Intente nuevamente.');
+    }
+  }, [currentPassword, newPassword, confirmPassword, passwordValidation, onClose]);
+
+  const handleClose = useCallback(() => {
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
     setError('');
     onClose();
-  };
-
-  const handleClose = () => {
-    setCurrentPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
-    setError('');
-    onClose();
-  };
+  }, [onClose]);
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
@@ -121,9 +151,9 @@ export function CambiarContrasena({ isOpen, onClose, currentUser }: CambiarContr
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Ingrese la nueva contraseña"
-                className={passwordFormStyles.inputPassword}
+                className={`${passwordFormStyles.inputPassword} ${newPassword && !passwordValidation.isValid ? 'border-red-500' : ''}`}
                 required
-                minLength={6}
+                minLength={8}
               />
               <button
                 type="button"
@@ -133,9 +163,33 @@ export function CambiarContrasena({ isOpen, onClose, currentUser }: CambiarContr
                 {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
-            <p className={passwordFormStyles.hint}>
-              Mínimo 6 caracteres
-            </p>
+            <div className="mt-2">
+              <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Requisitos de seguridad:
+              </p>
+              <div className="space-y-1.5">
+                {passwordValidation.requirements.map((req, index) => (
+                  <div key={index} className="flex items-center gap-2">
+                    <div className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                      req.met 
+                        ? 'border-blue-600 dark:border-blue-500 bg-blue-600 dark:bg-blue-500' 
+                        : 'border-gray-400 dark:border-gray-500 bg-transparent'
+                    }`}>
+                      {req.met && (
+                        <div className="w-1.5 h-1.5 rounded-full bg-white" />
+                      )}
+                    </div>
+                    <span className={`text-xs ${
+                      req.met 
+                        ? 'text-gray-800 dark:text-gray-200' 
+                        : 'text-gray-600 dark:text-gray-400'
+                    }`}>
+                      {req.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
           <div className={passwordFormStyles.field}>
@@ -173,6 +227,7 @@ export function CambiarContrasena({ isOpen, onClose, currentUser }: CambiarContr
             </Button>
             <Button
               type="submit"
+              disabled={!canSubmit}
               className={passwordFormStyles.submitButton}
             >
               <Lock className="h-4 w-4 mr-2" />

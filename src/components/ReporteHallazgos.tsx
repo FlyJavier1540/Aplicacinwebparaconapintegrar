@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback, memo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -10,15 +10,21 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { Textarea } from './ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { Plus, Edit, Search, AlertTriangle, FileText, Camera, MapPin, Clock, Eye, Shield, Calendar, CheckCircle, XCircle, AlertCircle, ListPlus, ArrowRight, ChevronDown, Upload, X, Image as ImageIcon, Tag, User, Activity, History } from 'lucide-react';
-import { guardarecursos, areasProtegidas } from '../data/mock-data';
+import { Plus, Edit, Search, AlertTriangle, FileText, Camera, MapPin, Clock, Eye, Shield, Calendar, CheckCircle, XCircle, AlertCircle, ListPlus, ArrowRight, ChevronDown, Upload, X, Image as ImageIcon, Tag, User, Activity, History, Loader2 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { motion } from 'motion/react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
+import { parseLocalDate } from '../utils/formatters';
 import { useIsMobile } from './ui/use-mobile';
-import { buttonStyles, filterStyles, tableStyles, badgeStyles, getEstadoBadgeClass, getPrioridadBadgeClass, tabStyles, formStyles, alertDialogStyles, textStyles } from '../styles/shared-styles';
+import { buttonStyles, filterStyles, tableStyles, badgeStyles, getEstadoBadgeClass, getGravedadBadgeClass, tabStyles, formStyles, alertDialogStyles, textStyles } from '../styles/shared-styles';
 import { hallazgosService, Hallazgo, HallazgoFormData, SeguimientoFormData } from '../utils/hallazgosService';
+import { authService } from '../utils/authService';
+import { Alert, AlertDescription } from './ui/alert';
+import { areasProtegidasService } from '../utils/areasProtegidasService';
+import { guardarecursosService } from '../utils/guardarecursosService';
+import { AreaProtegida, Guardarecurso } from '../types';
+import { forceLogout } from '../utils/base-api-service';
 
 interface ReporteHallazgosProps {
   userPermissions: {
@@ -32,283 +38,25 @@ interface ReporteHallazgosProps {
 
 export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallazgosProps) {
   const isMobile = useIsMobile();
-  const [hallazgosList, setHallazgosList] = useState<Hallazgo[]>([
-    {
-      id: '1',
-      titulo: 'Tala ilegal detectada en sector norte',
-      descripcion: 'Se encontraron árboles cortados recientemente sin autorización en el sector norte del área protegida',
-      prioridad: 'Alta',
-      estado: 'En Investigación',
-      ubicacion: 'Sendero Norte, km 2.5',
-      coordenadas: { lat: 17.2345, lng: -89.6234 },
-      areaProtegida: 'tikal',
-      guardarecurso: '1',
-      fechaReporte: '2024-10-05T10:30:00Z',
-      observaciones: 'Se estima que la tala ocurrió durante la madrugada. Se encontraron herramientas abandonadas.',
-      evidencias: ['foto1.jpg', 'foto2.jpg'],
-      seguimiento: [
-        {
-          fecha: '2024-10-05T10:30:00Z',
-          accion: 'Reporte inicial',
-          responsable: 'Carlos Mendoza',
-          observaciones: 'Hallazgo reportado durante patrullaje matutino'
-        },
-        {
-          fecha: '2024-10-05T14:00:00Z',
-          accion: 'Inspección detallada',
-          responsable: 'María García',
-          observaciones: 'Se documentaron 8 árboles cortados, especies de caoba'
-        }
-      ]
-    },
-    {
-      id: '2',
-      titulo: 'Contaminación de agua en laguna',
-      descripcion: 'Se observa cambio de coloración en el agua de la laguna principal',
-      prioridad: 'Crítica',
-      estado: 'En Proceso',
-      ubicacion: 'Laguna Central',
-      coordenadas: { lat: 16.9850, lng: -89.8670 },
-      areaProtegida: 'biotopo-cerro-cahui',
-      guardarecurso: '2',
-      fechaReporte: '2024-10-04T08:00:00Z',
-      observaciones: 'Posible contaminación por agroquímicos de fincas cercanas',
-      evidencias: ['agua1.jpg', 'muestra1.jpg'],
-      seguimiento: [
-        {
-          fecha: '2024-10-04T08:00:00Z',
-          accion: 'Reporte inicial',
-          responsable: 'María García',
-          observaciones: 'Coloración amarillenta del agua detectada'
-        },
-        {
-          fecha: '2024-10-04T12:00:00Z',
-          accion: 'Toma de muestras',
-          responsable: 'Luis Ramírez',
-          observaciones: 'Muestras enviadas a laboratorio para análisis'
-        }
-      ]
-    },
-    {
-      id: '3',
-      titulo: 'Incendio forestal controlado',
-      descripcion: 'Pequeño incendio forestal detectado y controlado en la zona sur',
-      prioridad: 'Alta',
-      estado: 'Resuelto',
-      ubicacion: 'Sector Sur, Zona 3',
-      coordenadas: { lat: 17.2100, lng: -89.6400 },
-      areaProtegida: 'sierra-del-lacandon',
-      guardarecurso: '3',
-      fechaReporte: '2024-10-03T14:20:00Z',
-      fechaResolucion: '2024-10-03T18:00:00Z',
-      observaciones: 'Incendio causado por visitantes. Área afectada: 0.5 hectáreas',
-      accionesTomadas: 'Se controló el incendio con brigadas forestales. Se identificó a responsables',
-      evidencias: ['incendio1.jpg', 'incendio2.jpg', 'incendio3.jpg'],
-      seguimiento: [
-        {
-          fecha: '2024-10-03T14:20:00Z',
-          accion: 'Reporte inicial',
-          responsable: 'Pedro Sánchez',
-          observaciones: 'Incendio detectado, se activa protocolo de emergencia'
-        },
-        {
-          fecha: '2024-10-03T15:00:00Z',
-          accion: 'Brigadas en sitio',
-          responsable: 'Ana Morales',
-          observaciones: 'Brigada forestal iniciando control del fuego'
-        },
-        {
-          fecha: '2024-10-03T18:00:00Z',
-          accion: 'Incendio controlado',
-          responsable: 'Pedro Sánchez',
-          observaciones: 'Incendio totalmente controlado, evaluando daños'
-        }
-      ]
-    },
-    {
-      id: '4',
-      titulo: 'Caza furtiva de venado',
-      descripcion: 'Se encontraron restos de venado cazado ilegalmente',
-      prioridad: 'Alta',
-      estado: 'En Investigación',
-      ubicacion: 'Zona de Amortiguamiento Norte',
-      coordenadas: { lat: 15.2200, lng: -89.9600 },
-      areaProtegida: 'sierra-de-las-minas',
-      guardarecurso: '4',
-      fechaReporte: '2024-10-02T07:15:00Z',
-      observaciones: 'Se encontraron trampas y evidencia de campamento',
-      evidencias: ['caza1.jpg'],
-      seguimiento: [
-        {
-          fecha: '2024-10-02T07:15:00Z',
-          accion: 'Reporte inicial',
-          responsable: 'Jorge López',
-          observaciones: 'Hallazgo durante patrullaje matutino'
-        }
-      ]
-    },
-    {
-      id: '5',
-      titulo: 'Daño a infraestructura turística',
-      descripcion: 'Mirador principal vandalizado con grafitis',
-      prioridad: 'Media',
-      estado: 'En Proceso',
-      ubicacion: 'Mirador Principal',
-      coordenadas: { lat: 17.2400, lng: -89.6200 },
-      areaProtegida: 'tikal',
-      guardarecurso: '5',
-      fechaReporte: '2024-10-01T09:00:00Z',
-      observaciones: 'Grafitis en paredes y barandales dañados',
-      accionesTomadas: 'Se inició proceso de limpieza y reparación',
-      evidencias: ['vandalismo1.jpg', 'vandalismo2.jpg'],
-      seguimiento: [
-        {
-          fecha: '2024-10-01T09:00:00Z',
-          accion: 'Reporte inicial',
-          responsable: 'Carmen Ruiz',
-          observaciones: 'Vandalismo reportado por guardarecurso'
-        },
-        {
-          fecha: '2024-10-01T14:00:00Z',
-          accion: 'Evaluación de daños',
-          responsable: 'Mario Castillo',
-          observaciones: 'Se evaluó costo de reparación'
-        }
-      ]
-    },
-    {
-      id: '6',
-      titulo: 'Avistamiento de fauna herida',
-      descripcion: 'Jaguar con herida en pata detectado en zona de monitoreo',
-      prioridad: 'Alta',
-      estado: 'Reportado',
-      ubicacion: 'Zona de Monitoreo B',
-      coordenadas: { lat: 16.1100, lng: -90.8400 },
-      areaProtegida: 'sierra-del-lacandon',
-      guardarecurso: '6',
-      fechaReporte: '2024-10-08T06:30:00Z',
-      observaciones: 'Animal observado mediante cámara trampa, posible trampa',
-      evidencias: ['jaguar1.jpg'],
-      seguimiento: [
-        {
-          fecha: '2024-10-08T06:30:00Z',
-          accion: 'Reporte inicial',
-          responsable: 'Roberto Díaz',
-          observaciones: 'Se notificó a veterinarios de vida silvestre'
-        }
-      ]
-    },
-    {
-      id: '7',
-      titulo: 'Especie de flora endémica amenazada',
-      descripcion: 'Población de orquídeas endémicas afectada por extracción ilegal',
-      prioridad: 'Alta',
-      estado: 'En Investigación',
-      ubicacion: 'Bosque Nuboso Sector 2',
-      coordenadas: { lat: 15.2100, lng: -89.9500 },
-      areaProtegida: 'sierra-de-las-minas',
-      guardarecurso: '7',
-      fechaReporte: '2024-09-30T11:00:00Z',
-      observaciones: 'Se detectó extracción de aproximadamente 15 plantas',
-      evidencias: ['orquideas1.jpg', 'orquideas2.jpg'],
-      seguimiento: [
-        {
-          fecha: '2024-09-30T11:00:00Z',
-          accion: 'Reporte inicial',
-          responsable: 'Elena Vargas',
-          observaciones: 'Extracción ilegal detectada'
-        },
-        {
-          fecha: '2024-10-01T09:00:00Z',
-          accion: 'Inventario de daños',
-          responsable: 'Elena Vargas',
-          observaciones: 'Se realizó inventario completo de la zona'
-        }
-      ]
-    },
-    {
-      id: '8',
-      titulo: 'Erosión en sendero principal',
-      descripcion: 'Erosión severa causada por lluvias en sendero turístico',
-      prioridad: 'Media',
-      estado: 'En Proceso',
-      ubicacion: 'Sendero Los Cipreses',
-      coordenadas: { lat: 14.3820, lng: -90.6010 },
-      areaProtegida: 'volcan-pacaya',
-      guardarecurso: '8',
-      fechaReporte: '2024-09-28T13:00:00Z',
-      observaciones: 'Sendero parcialmente intransitable, riesgo para visitantes',
-      accionesTomadas: 'Se colocó señalización de peligro, programada reparación',
-      evidencias: ['erosion1.jpg'],
-      seguimiento: [
-        {
-          fecha: '2024-09-28T13:00:00Z',
-          accion: 'Reporte inicial',
-          responsable: 'Marcos Hernández',
-          observaciones: 'Daños reportados después de tormenta'
-        },
-        {
-          fecha: '2024-09-29T08:00:00Z',
-          accion: 'Evaluación técnica',
-          responsable: 'Ingeniero de Senderos',
-          observaciones: 'Se evaluó alcance de reparaciones necesarias'
-        }
-      ]
-    },
-    {
-      id: '9',
-      titulo: 'Basura acumulada en zona de playa',
-      descripcion: 'Acumulación de desechos plásticos en zona de anidación',
-      prioridad: 'Alta',
-      estado: 'Resuelto',
-      ubicacion: 'Playa de Anidación',
-      coordenadas: { lat: 13.9220, lng: -90.8260 },
-      areaProtegida: 'monterrico',
-      guardarecurso: '9',
-      fechaReporte: '2024-09-25T16:00:00Z',
-      fechaResolucion: '2024-09-26T12:00:00Z',
-      observaciones: 'Desechos plásticos afectando zona de anidación de tortugas',
-      accionesTomadas: 'Jornada de limpieza realizada con voluntarios',
-      evidencias: ['basura1.jpg', 'limpieza1.jpg'],
-      seguimiento: [
-        {
-          fecha: '2024-09-25T16:00:00Z',
-          accion: 'Reporte inicial',
-          responsable: 'Sandra Torres',
-          observaciones: 'Contaminación detectada'
-        },
-        {
-          fecha: '2024-09-26T12:00:00Z',
-          accion: 'Limpieza completada',
-          responsable: 'Sandra Torres',
-          observaciones: 'Se recolectaron 50kg de desechos plásticos'
-        }
-      ]
-    },
-    {
-      id: '10',
-      titulo: 'Señalización deteriorada',
-      descripcion: 'Señales informativas y de advertencia en mal estado',
-      prioridad: 'Baja',
-      estado: 'Reportado',
-      ubicacion: 'Entrada Principal',
-      coordenadas: { lat: 17.2300, lng: -89.6250 },
-      areaProtegida: 'tikal',
-      guardarecurso: '10',
-      fechaReporte: '2024-09-27T10:00:00Z',
-      observaciones: 'Señales decoloradas por sol y lluvia',
-      evidencias: [],
-      seguimiento: [
-        {
-          fecha: '2024-09-27T10:00:00Z',
-          accion: 'Reporte inicial',
-          responsable: 'Laura Mejía',
-          observaciones: 'Se solicitó presupuesto para reemplazo'
-        }
-      ]
-    },
-  ]);
   
+  // Helper para formatear fechas de manera segura - MEMOIZADO
+  const formatearFecha = useCallback((fechaStr: string, formato: string = "d 'de' MMMM 'de' yyyy") => {
+    try {
+      // Si la fecha no tiene hora, agregar 'T12:00:00' (mediodía) para evitar problemas de timezone
+      const fechaDate = fechaStr.includes('T') 
+        ? new Date(fechaStr) 
+        : new Date(fechaStr + 'T12:00:00');
+      return format(fechaDate, formato, { locale: es });
+    } catch (error) {
+      console.error('Error al formatear fecha:', error, fechaStr);
+      return fechaStr;
+    }
+  }, []);
+  
+  const [hallazgosList, setHallazgosList] = useState<Hallazgo[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'activos' | 'historial'>('activos');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -321,6 +69,52 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
   const [formData, setFormData] = useState<HallazgoFormData>(hallazgosService.createEmptyFormData());
   const [seguimientoFormData, setSeguimientoFormData] = useState<SeguimientoFormData>(hallazgosService.createEmptySeguimientoFormData());
   const [evidenciasPreview, setEvidenciasPreview] = useState<string[]>([]);
+  
+  // Estados para áreas protegidas y guardarecursos reales
+  const [areasProtegidas, setAreasProtegidas] = useState<AreaProtegida[]>([]);
+  const [guardarecursos, setGuardarecursos] = useState<Guardarecurso[]>([]);
+  
+  // Filtrar solo áreas activas y ordenarlas alfabéticamente - Memoizado
+  const areasActivasProtegidas = useMemo(() => {
+    return areasProtegidas
+      .filter(area => area.estado === 'Activo')
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  }, [areasProtegidas]);
+
+  // Cargar datos iniciales (áreas protegidas, guardarecursos y hallazgos) - MEMOIZADO
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const token = authService.getCurrentToken();
+      if (!token) {
+        setError('No hay sesión activa');
+        setIsLoading(false);
+        return;
+      }
+
+      // Cargar datos en paralelo
+      const [areas, guardas, hallazgos] = await Promise.all([
+        areasProtegidasService.fetchAreasProtegidas(token),
+        guardarecursosService.fetchGuardarecursos(token),
+        hallazgosService.fetchHallazgos(token)
+      ]);
+
+      setAreasProtegidas(areas);
+      setGuardarecursos(guardas);
+      setHallazgosList(hallazgos);
+    } catch (err) {
+      console.error('❌ ERROR AL CARGAR HALLAZGOS - FORZANDO LOGOUT:', err);
+      forceLogout();
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   // Filtrado usando el servicio
   const filteredHallazgos = useMemo(() => {
@@ -336,38 +130,54 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
     return hallazgosService.getHallazgosResueltos(filteredHallazgos);
   }, [filteredHallazgos]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (editingHallazgo) {
-      // Actualizar usando el servicio
-      const hallazgoActualizado = hallazgosService.updateHallazgo(editingHallazgo, formData, evidenciasPreview);
-      setHallazgosList(prev => prev.map(h => 
-        h.id === editingHallazgo.id ? hallazgoActualizado : h
-      ));
-      toast.success('Hallazgo actualizado', {
-        description: 'El hallazgo ha sido actualizado correctamente'
-      });
-    } else {
-      // Crear usando el servicio
-      const nuevoHallazgo = hallazgosService.createHallazgo(formData, evidenciasPreview);
-      setHallazgosList(prev => [...prev, nuevoHallazgo]);
-      toast.success('Hallazgo creado', {
-        description: 'El hallazgo ha sido reportado correctamente'
-      });
-    }
-    
-    resetForm();
-    setIsDialogOpen(false);
-  };
-
-  const resetForm = () => {
+  // Handlers principales - MEMOIZADOS
+  const resetForm = useCallback(() => {
     setFormData(hallazgosService.createEmptyFormData());
     setEditingHallazgo(null);
     setEvidenciasPreview([]);
-  };
+  }, []);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    try {
+      setIsSaving(true);
+      const token = authService.getCurrentToken();
+      
+      if (!token) {
+        toast.error('Error', { description: 'No hay sesión activa' });
+        return;
+      }
+
+      if (editingHallazgo) {
+        // Actualizar usando el servicio (local, ya que no hay endpoint de actualización)
+        const hallazgoActualizado = hallazgosService.updateHallazgo(editingHallazgo, formData, evidenciasPreview);
+        setHallazgosList(prev => prev.map(h => 
+          h.id === editingHallazgo.id ? hallazgoActualizado : h
+        ));
+        toast.success('Hallazgo actualizado', {
+          description: 'El hallazgo ha sido actualizado correctamente'
+        });
+      } else {
+        // Crear usando la API
+        const nuevoHallazgo = await hallazgosService.createHallazgoAPI(token, formData);
+        setHallazgosList(prev => [nuevoHallazgo, ...prev]);
+        toast.success('Hallazgo creado', {
+          description: 'El hallazgo ha sido reportado correctamente'
+        });
+      }
+      
+      resetForm();
+      setIsDialogOpen(false);
+    } catch (err) {
+      console.error('❌ ERROR AL GUARDAR HALLAZGO - FORZANDO LOGOUT:', err);
+      forceLogout();
+    } finally {
+      setIsSaving(false);
+    }
+  }, [editingHallazgo, formData, evidenciasPreview, resetForm]);
+
+  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
 
@@ -377,65 +187,110 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
 
     // Limpiar el input para permitir subir el mismo archivo nuevamente
     e.target.value = '';
-  };
+  }, [evidenciasPreview]);
 
-  const handleRemoveImage = (index: number) => {
+  const handleRemoveImage = useCallback((index: number) => {
     setEvidenciasPreview(hallazgosService.removeImage(evidenciasPreview, index));
-  };
+  }, [evidenciasPreview]);
 
-  const handleEdit = (hallazgo: Hallazgo) => {
+  const handleEdit = useCallback((hallazgo: Hallazgo) => {
     setFormData(hallazgosService.hallazgoToFormData(hallazgo));
     setEditingHallazgo(hallazgo);
     // Cargar evidencias existentes (simuladas)
     setEvidenciasPreview(hallazgo.evidencias || []);
     setIsDialogOpen(true);
-  };
+  }, []);
 
-  const handleView = (hallazgo: Hallazgo) => {
+  const handleView = useCallback((hallazgo: Hallazgo) => {
     setSelectedHallazgo(hallazgo);
     setIsViewDialogOpen(true);
-  };
+  }, []);
 
-  const handleAgregarSeguimiento = (hallazgo: Hallazgo) => {
+  const handleAgregarSeguimiento = useCallback((hallazgo: Hallazgo) => {
     setHallazgoParaSeguimiento(hallazgo);
     setIsSeguimientoDialogOpen(true);
-  };
+  }, []);
 
-  const handleSubmitSeguimiento = (e: React.FormEvent) => {
+  const handleSubmitSeguimiento = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!hallazgoParaSeguimiento) return;
     
-    // Agregar seguimiento usando el servicio
-    const hallazgoActualizado = hallazgosService.agregarSeguimiento(hallazgoParaSeguimiento, seguimientoFormData);
+    setIsSaving(true);
     
-    setHallazgosList(prev => prev.map(h => 
-      h.id === hallazgoParaSeguimiento.id ? hallazgoActualizado : h
-    ));
-    
-    setSeguimientoFormData(hallazgosService.createEmptySeguimientoFormData());
-    setIsSeguimientoDialogOpen(false);
-    setHallazgoParaSeguimiento(null);
-  };
-
-  const handleCambiarEstado = (hallazgoId: string, nuevoEstado: string) => {
-    setHallazgosList(prev => prev.map(h => {
-      if (h.id === hallazgoId) {
-        // Cambiar estado usando el servicio
-        const hallazgoActualizado = hallazgosService.cambiarEstado(h, nuevoEstado);
-        
-        // Mostrar notificación
-        toast.success('Estado actualizado', {
-          description: `El hallazgo cambió a estado: ${nuevoEstado}`
-        });
-        
-        return hallazgoActualizado;
+    try {
+      const token = authService.getCurrentToken();
+      if (!token) {
+        toast.error('Error', { description: 'No hay sesión activa' });
+        return;
       }
-      return h;
-    }));
-  };
 
-  const handleGenerarReporte = (hallazgo: Hallazgo) => {
+      // Agregar seguimiento usando la API
+      const nuevoSeguimiento = await hallazgosService.agregarSeguimientoAPI(
+        token, 
+        hallazgoParaSeguimiento.id, 
+        seguimientoFormData
+      );
+      
+      // Actualizar el hallazgo en la lista agregando el nuevo seguimiento
+      setHallazgosList(prev => prev.map(h => 
+        h.id === hallazgoParaSeguimiento.id 
+          ? { ...h, seguimiento: [nuevoSeguimiento, ...h.seguimiento] }
+          : h
+      ));
+      
+      // Si el modal de detalles está abierto y es el mismo hallazgo, actualizarlo también
+      if (selectedHallazgo && selectedHallazgo.id === hallazgoParaSeguimiento.id) {
+        setSelectedHallazgo({
+          ...selectedHallazgo,
+          seguimiento: [nuevoSeguimiento, ...selectedHallazgo.seguimiento]
+        });
+      }
+      
+      setSeguimientoFormData(hallazgosService.createEmptySeguimientoFormData());
+      setIsSeguimientoDialogOpen(false);
+      setHallazgoParaSeguimiento(null);
+      
+      toast.success('Seguimiento agregado', {
+        description: 'El seguimiento se guardó correctamente'
+      });
+    } catch (err) {
+      console.error('Error al agregar seguimiento:', err);
+      toast.error('Error', {
+        description: err instanceof Error ? err.message : 'Error al agregar seguimiento'
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [hallazgoParaSeguimiento, seguimientoFormData, selectedHallazgo]);
+
+  const handleCambiarEstado = useCallback(async (hallazgoId: string, nuevoEstado: string) => {
+    try {
+      const token = authService.getCurrentToken();
+      if (!token) {
+        toast.error('Error', { description: 'No hay sesión activa' });
+        return;
+      }
+
+      // Cambiar estado usando la API
+      const hallazgoActualizado = await hallazgosService.cambiarEstadoAPI(token, hallazgoId, nuevoEstado);
+
+      setHallazgosList(prev => prev.map(h =>
+        h.id === hallazgoId ? hallazgoActualizado : h
+      ));
+
+      toast.success('Estado actualizado', {
+        description: `El hallazgo cambió a estado: ${nuevoEstado}`
+      });
+    } catch (err) {
+      console.error('Error al cambiar estado:', err);
+      toast.error('Error', {
+        description: err instanceof Error ? err.message : 'Error al cambiar estado'
+      });
+    }
+  }, []);
+
+  const handleGenerarReporte = useCallback((hallazgo: Hallazgo) => {
     toast.info('Generando reporte', {
       description: 'Preparando documento PDF...'
     });
@@ -451,10 +306,18 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
         description: result.error || 'No se pudo generar el archivo PDF. Por favor intente de nuevo.'
       });
     }
-  };
+  }, [areasProtegidas, guardarecursos]);
 
   return (
     <div className="space-y-4">
+      {/* Error Alert */}
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
       {/* Barra de búsqueda - Diseño Minimalista */}
       <div className={filterStyles.filterGroupNoBorder}>
         {/* Búsqueda */}
@@ -564,7 +427,7 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                         <SelectValue placeholder="Seleccione área" />
                       </SelectTrigger>
                       <SelectContent>
-                        {areasProtegidas.map(area => (
+                        {areasActivasProtegidas.map(area => (
                           <SelectItem key={area.id} value={area.id}>
                             {area.nombre}
                           </SelectItem>
@@ -767,8 +630,16 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                 <Button 
                   type="submit" 
                   className="w-full sm:w-auto sm:min-w-[100px] bg-gradient-to-r from-orange-600 to-amber-700 hover:from-orange-700 hover:to-amber-800"
+                  disabled={isSaving}
                 >
-                  {editingHallazgo ? 'Actualizar' : 'Guardar'}
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Guardando...
+                    </>
+                  ) : (
+                    editingHallazgo ? 'Actualizar' : 'Guardar'
+                  )}
                 </Button>
               </div>
             </form>
@@ -895,7 +766,16 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                   );
                 })}
                 
-                {hallazgosActivos.length === 0 && (
+                {isLoading ? (
+                  <Card>
+                    <CardContent className="p-8 text-center">
+                      <Loader2 className="h-12 w-12 mx-auto mb-3 animate-spin opacity-30 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">
+                        Cargando hallazgos...
+                      </p>
+                    </CardContent>
+                  </Card>
+                ) : hallazgosActivos.length === 0 && (
                   <Card>
                     <CardContent className="p-8 text-center">
                       <AlertTriangle className="h-12 w-12 mx-auto mb-3 opacity-30 text-muted-foreground" />
@@ -1068,7 +948,7 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                                   {hallazgo.prioridad}
                                 </Badge>
                                 <span className="text-sm text-gray-500 dark:text-gray-400">
-                                  {hallazgo.fechaResolucion ? new Date(hallazgo.fechaResolucion).toLocaleDateString('es-GT') : 'N/A'}
+                                  {hallazgo.fechaResolucion ? parseLocalDate(hallazgo.fechaResolucion).toLocaleDateString('es-GT') : 'N/A'}
                                 </span>
                               </div>
                             </div>
@@ -1101,7 +981,16 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                   );
                 })}
                 
-                {hallazgosResueltos.length === 0 && (
+                {isLoading ? (
+                  <Card>
+                    <CardContent className="p-8 text-center">
+                      <Loader2 className="h-12 w-12 mx-auto mb-3 animate-spin opacity-30 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">
+                        Cargando historial...
+                      </p>
+                    </CardContent>
+                  </Card>
+                ) : hallazgosResueltos.length === 0 && (
                   <Card>
                     <CardContent className="p-8 text-center">
                       <History className="h-12 w-12 mx-auto mb-3 opacity-30 text-muted-foreground" />
@@ -1123,7 +1012,7 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                           <TableHead className={tableStyles.headerCell}>Hallazgo</TableHead>
                           <TableHead className={`${tableStyles.headerCell} hidden lg:table-cell`}>Ubicación</TableHead>
                           <TableHead className={tableStyles.headerCell}>Prioridad</TableHead>
-                          <TableHead className={tableStyles.headerCell}>Fecha Resolución</TableHead>
+                          <TableHead className={tableStyles.headerCell}>Fecha de Reporte</TableHead>
                           <TableHead className={tableStyles.headerCellRight}>Acciones</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -1144,7 +1033,7 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                               
                               {/* Ubicación */}
                               <TableCell className={`${tableStyles.cell} hidden lg:table-cell`}>
-                                <span className={tableStyles.infoWithIcon.text}>{area?.nombre || 'N/A'}</span>
+                                <span className={tableStyles.infoWithIcon.text}>{hallazgo.areaProtegidaNombre || area?.nombre || 'N/A'}</span>
                               </TableCell>
                               
                               {/* Prioridad */}
@@ -1154,12 +1043,12 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                                 </Badge>
                               </TableCell>
                               
-                              {/* Fecha Resolución */}
+                              {/* Fecha de Reporte */}
                               <TableCell className={tableStyles.cell}>
                                 <div className={tableStyles.infoWithIcon.container}>
-                                  <CheckCircle className={tableStyles.infoWithIcon.icon} />
+                                  <Calendar className={tableStyles.infoWithIcon.icon} />
                                   <span className="text-sm text-gray-600 dark:text-gray-400">
-                                    {hallazgo.fechaResolucion ? format(new Date(hallazgo.fechaResolucion), "d MMM yyyy", { locale: es }) : 'N/A'}
+                                    {formatearFecha(hallazgo.fechaReporte, "d MMM yyyy")}
                                   </span>
                                 </div>
                               </TableCell>
@@ -1219,9 +1108,6 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
           </DialogHeader>
           
           {selectedHallazgo && (() => {
-            const area = areasProtegidas.find(a => a.id === selectedHallazgo.areaProtegida);
-            const guardarecurso = guardarecursos.find(g => g.id === selectedHallazgo.guardarecurso);
-            
             return (
               <div className={formStyles.form}>
                 {/* Información General */}
@@ -1239,7 +1125,7 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                     {/* Prioridad */}
                     <div className={formStyles.field}>
                       <Label className={formStyles.label}>Prioridad</Label>
-                      <Badge variant="outline" className={getPrioridadBadgeClass(selectedHallazgo.prioridad)}>
+                      <Badge variant="outline" className={getGravedadBadgeClass(selectedHallazgo.prioridad)}>
                         {selectedHallazgo.prioridad}
                       </Badge>
                     </div>
@@ -1261,20 +1147,24 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                     {/* Área Protegida */}
                     <div className={formStyles.field}>
                       <Label className={formStyles.label}>Área Protegida</Label>
-                      <p className={textStyles.primary}>{area?.nombre}</p>
+                      <p className={textStyles.primary}>
+                        {selectedHallazgo.areaProtegidaNombre || 'Sin asignación'}
+                      </p>
                     </div>
                     
                     {/* Guardarecurso */}
                     <div className={formStyles.field}>
                       <Label className={formStyles.label}>Guardarecurso</Label>
-                      <p className={textStyles.primary}>{guardarecurso?.nombre} {guardarecurso?.apellido}</p>
+                      <p className={textStyles.primary}>
+                        {selectedHallazgo.guardarecursoNombre || 'Desconocido'}
+                      </p>
                     </div>
                     
                     {/* Fecha de Reporte */}
                     <div className={formStyles.field}>
                       <Label className={formStyles.label}>Fecha de Reporte</Label>
                       <p className={textStyles.primary}>
-                        {format(new Date(selectedHallazgo.fechaReporte), 'd MMM yyyy', { locale: es })}
+                        {formatearFecha(selectedHallazgo.fechaReporte)}
                       </p>
                     </div>
                   </div>
@@ -1292,7 +1182,7 @@ export function ReporteHallazgos({ userPermissions, currentUser }: ReporteHallaz
                           <div className="flex items-start justify-between gap-2 mb-1">
                             <p className="font-medium text-xs">{seg.accion}</p>
                             <span className={textStyles.mutedSmall}>
-                              {format(new Date(seg.fecha), "d MMM yyyy", { locale: es })}
+                              {formatearFecha(seg.fecha, "d MMM yyyy")}
                             </span>
                           </div>
                           <p className={`${textStyles.mutedSmall} mb-1`}>

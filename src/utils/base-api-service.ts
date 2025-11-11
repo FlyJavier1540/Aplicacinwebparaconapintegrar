@@ -14,20 +14,38 @@
 
 /**
  * URL base del backend API
- * En desarrollo, apunta a tu servidor local
- * En producción, debe apuntar a tu servidor de producción
+ * Apunta al backend de Supabase Edge Functions
  */
+import { projectId, publicAnonKey } from './supabase/info';
+
 const getApiBaseUrl = (): string => {
-  // Verificar si import.meta.env está disponible (Vite)
-  if (typeof import.meta !== 'undefined' && import.meta.env) {
-    return import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api';
-  }
-  
-  // Fallback para otros entornos
-  return 'http://localhost:3000/api';
+  // Usar Supabase Edge Functions como backend
+  return `https://${projectId}.supabase.co/functions/v1/make-server-276018ed`;
 };
 
 const API_BASE_URL = getApiBaseUrl();
+
+/**
+ * Obtener el token de autenticación
+ * Primero intenta obtenerlo de la sesión de CONAP, si no, usa el anon key
+ */
+const getDefaultAuthToken = (): string => {
+  // Intentar obtener el token de la sesión guardada
+  const sessionStr = localStorage.getItem('conap_session');
+  if (sessionStr) {
+    try {
+      const session = JSON.parse(sessionStr);
+      if (session.token) {
+        return session.token;
+      }
+    } catch (e) {
+      // Si falla el parsing, continuar
+    }
+  }
+  
+  // Fallback al publicAnonKey
+  return publicAnonKey;
+};
 
 /**
  * Timeout para las peticiones (en milisegundos)
@@ -112,6 +130,47 @@ export const hasAuthToken = (): boolean => {
   return !!getAuthToken();
 };
 
+/**
+ * Fuerza el logout del usuario actual
+ * LIMPIA TODO y dispara evento para que App.tsx muestre el Login
+ */
+export const forceLogout = (): void => {
+  console.error('❌ FORZANDO LOGOUT - SIN TOKEN O ERROR CRÍTICO');
+  
+  // Limpiar absolutamente TODO
+  localStorage.clear();
+  sessionStorage.clear();
+  
+  // Disparar evento personalizado para que App.tsx maneje el logout
+  window.dispatchEvent(new CustomEvent('auth:force-logout'));
+  
+  // Forzar recarga completa de la página como fallback
+  setTimeout(() => {
+    window.location.reload();
+  }, 100);
+};
+
+/**
+ * Obtiene el token JWT requerido o FUERZA LOGOUT inmediatamente
+ * 
+ * Esta función DEBE usarse en todos los servicios para asegurar
+ * que SIEMPRE se use un token JWT válido.
+ * 
+ * Si no hay token: LIMPIA TODO y FUERZA LOGOUT
+ * 
+ * @returns Token JWT válido
+ */
+export const getRequiredAuthToken = (): string => {
+  const token = getAuthToken();
+  
+  if (!token) {
+    forceLogout();
+    throw new Error('NO_TOKEN');
+  }
+  
+  return token;
+};
+
 // ===== FUNCIÓN PRINCIPAL DE PETICIONES =====
 
 /**
@@ -167,7 +226,7 @@ export async function fetchApi<T = any>(
 
   // Agregar token JWT si se requiere autenticación
   if (requiresAuth) {
-    const token = getAuthToken();
+    const token = getAuthToken() || getDefaultAuthToken();
     if (token) {
       requestHeaders['Authorization'] = `Bearer ${token}`;
     }
@@ -245,11 +304,15 @@ export async function fetchApi<T = any>(
 
     // Manejar errores HTTP específicos
     if (error instanceof ApiError) {
-      // Error 401: Token inválido o expirado
+      // Error 401: Token inválido o expirado - FORZAR LOGOUT INMEDIATAMENTE
       if (error.statusCode === 401) {
-        removeAuthToken();
-        // Puedes disparar un evento o redireccionar al login aquí
-        window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+        console.error('❌ ERROR 401 - SESIÓN EXPIRADA - FORZANDO LOGOUT');
+        
+        // Forzar logout inmediatamente
+        forceLogout();
+        
+        // No continuar con el throw porque ya estamos forzando logout
+        return;
       }
 
       // Error 403: Sin permisos
@@ -466,6 +529,7 @@ export default {
   del,
   setAuthToken,
   getAuthToken,
+  getRequiredAuthToken,
   removeAuthToken,
   hasAuthToken,
   buildQueryString,
