@@ -1134,6 +1134,26 @@ app.post("/make-server-276018ed/usuarios", async (c) => {
       }, 500);
     }
 
+    // ✨ CREAR USUARIO EN SUPABASE AUTH para que pueda hacer login
+    try {
+      console.log(`📧 Creando usuario Coordinador en Supabase Auth: ${email}`);
+      await supabaseAdmin.auth.admin.createUser({
+        email: email,
+        password: password,
+        email_confirm: true,
+        user_metadata: {
+          nombre: nombre,
+          apellido: apellido,
+          rol: 'Coordinador'
+        }
+      });
+      console.log(`✅ Usuario Coordinador creado en Supabase Auth: ${email}`);
+    } catch (authError) {
+      console.error('⚠️ Error al crear usuario en Supabase Auth (no crítico):', authError);
+      // No fallar todo el proceso si solo falla Supabase Auth
+      // El usuario ya existe en PostgreSQL y puede ser creado manualmente en Auth después
+    }
+
     return c.json({ 
       success: true,
       usuario: nuevoUsuario 
