@@ -1,7 +1,7 @@
 
-  # Aplicación Web para Conap (Integrar)
+  # Aplicación Conap (100% funcional)
 
-  This is a code bundle for Aplicación Web para Conap (Integrar). The original project is available at https://www.figma.com/design/XrsnZ7iGzwbzDpRYmoQRUg/Aplicaci%C3%B3n-Web-para-Conap--Integrar-.
+  This is a code bundle for Aplicación Conap (100% funcional). The original project is available at https://www.figma.com/design/XrsnZ7iGzwbzDpRYmoQRUg/Aplicaci%C3%B3n-Conap--100--funcional-.
 
   ## Running the code
 

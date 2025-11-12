@@ -54,61 +54,6 @@ const SESSION_KEY = 'conap_session';
 const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 horas
 
 /**
- * Guarda la sesión en localStorage
- */
-export function saveSession(token: string, user: any): void {
-  const session: AuthSession = {
-    token,
-    user,
-    expiresAt: Date.now() + SESSION_DURATION
-  };
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  
-  // También guardar el token por separado para base-api-service
-  localStorage.setItem('conap_auth_token', token);
-}
-
-/**
- * Carga la sesión desde localStorage
- * 
- * 🔒 SEGURIDAD:
- * - Valida que la sesión no haya expirado (24 horas)
- * - Limpia automáticamente sesiones expiradas
- * - Maneja errores de parsing
- */
-export function loadSession(): AuthSession | null {
-  try {
-    const sessionStr = localStorage.getItem(SESSION_KEY);
-    if (!sessionStr) return null;
-
-    const session: AuthSession = JSON.parse(sessionStr);
-
-    // Verificar si la sesión ha expirado
-    if (Date.now() > session.expiresAt) {
-      console.log('⏰ Sesión local expirada (24h). Limpiando TODO...');
-      // Limpiar TODOS los datos cuando la sesión expira
-      clearAllData();
-      return null;
-    }
-
-    return session;
-  } catch (error) {
-    console.error('Error al cargar sesión:', error);
-    // Limpiar TODOS los datos si hay error de parsing
-    clearAllData();
-    return null;
-  }
-}
-
-/**
- * Limpia la sesión de localStorage
- */
-export function clearSession(): void {
-  localStorage.removeItem(SESSION_KEY);
-  localStorage.removeItem('conap_auth_token');
-}
-
-/**
  * 🧹 LIMPIEZA COMPLETA DE DATOS Y CACHÉ
  * 
  * Limpia TODOS los datos almacenados en el navegador:
@@ -119,6 +64,8 @@ export function clearSession(): void {
  * 
  * Esta función se usa cuando el token ha expirado para asegurar
  * que NO queden datos en memoria o caché.
+ * 
+ * IMPORTANTE: Esta función debe estar ANTES de loadSession() porque loadSession() la llama
  */
 export async function limpiarDatosCompleto(): Promise<void> {
   try {
@@ -177,6 +124,68 @@ export async function limpiarDatosCompleto(): Promise<void> {
     localStorage.clear();
     sessionStorage.clear();
   }
+}
+
+/**
+ * Alias para limpiarDatosCompleto (mantener compatibilidad)
+ */
+export async function clearAllData(): Promise<void> {
+  await limpiarDatosCompleto();
+}
+
+/**
+ * Guarda la sesión en localStorage
+ */
+export function saveSession(token: string, user: any): void {
+  const session: AuthSession = {
+    token,
+    user,
+    expiresAt: Date.now() + SESSION_DURATION
+  };
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  
+  // También guardar el token por separado para base-api-service
+  localStorage.setItem('conap_auth_token', token);
+}
+
+/**
+ * Carga la sesión desde localStorage
+ * 
+ * 🔒 SEGURIDAD:
+ * - Valida que la sesión no haya expirado (24 horas)
+ * - Limpia automáticamente sesiones expiradas
+ * - Maneja errores de parsing
+ */
+export function loadSession(): AuthSession | null {
+  try {
+    const sessionStr = localStorage.getItem(SESSION_KEY);
+    if (!sessionStr) return null;
+
+    const session: AuthSession = JSON.parse(sessionStr);
+
+    // Verificar si la sesión ha expirado
+    if (Date.now() > session.expiresAt) {
+      console.log('⏰ Sesión local expirada (24h). Limpiando TODO...');
+      // Limpiar TODOS los datos cuando la sesión expira
+      clearAllData();
+      return null;
+    }
+
+    return session;
+  } catch (error) {
+    console.error('Error al cargar sesión:', error);
+    // Limpiar TODOS los datos si hay error de parsing
+    clearAllData();
+    return null;
+  }
+}
+
+/**
+ * Limpia la sesión de localStorage
+ */
+export function clearSession(): void {
+  localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem('conap_auth_token');
 }
 
 /**
@@ -721,6 +730,7 @@ export const authService = {
   loadSession,
   clearSession,
   limpiarDatosCompleto,
+  clearAllData,
   isSessionValid,
   getCurrentUser,
   getCurrentToken,
