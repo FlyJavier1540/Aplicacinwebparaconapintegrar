@@ -115,11 +115,13 @@ export const COLORES_CONAP = {
  */
 
 /**
- * Obtiene las actividades completadas de un guardarecurso del año actual
+ * Obtiene las actividades completadas de un guardarecurso de un año específico
+ * @param guardarecursoId - ID del guardarecurso
+ * @param año - Año del reporte (por defecto año actual)
  */
-export function getActividadesGuardarecurso(guardarecursoId: string): Actividad[] {
+export function getActividadesGuardarecurso(guardarecursoId: string, año?: number): Actividad[] {
   const todasActividades = actividadesSync.getActividades();
-  const añoActual = new Date().getFullYear();
+  const añoReporte = año || new Date().getFullYear();
   
   const actividadesFiltradas = todasActividades.filter(act => {
     // Verificar que pertenece al guardarecurso
@@ -128,9 +130,9 @@ export function getActividadesGuardarecurso(guardarecursoId: string): Actividad[
     // Verificar que esté completada
     if (act.estado !== 'Completada') return false;
     
-    // Verificar que sea del año actual
+    // Verificar que sea del año especificado
     const añoActividad = new Date(act.fecha).getFullYear();
-    if (añoActividad !== añoActual) return false;
+    if (añoActividad !== añoReporte) return false;
     
     return true;
   });
@@ -337,17 +339,19 @@ function agregarFooter(doc: jsPDF, totalActividades: number): void {
  * Genera el reporte mensual de actividades en PDF
  * @param guardarecurso - Datos del guardarecurso
  * @param areaNombre - Nombre del área protegida asignada (desde base de datos)
+ * @param año - Año del reporte (por defecto año actual)
  */
 export function generarReporteActividadesMensual(
   guardarecurso: GuardarecursoData, 
-  areaNombre: string = 'No asignada'
+  areaNombre: string = 'No asignada',
+  año?: number
 ): ReporteResult {
   try {
     // Obtener datos
-    const año = new Date().getFullYear();
+    const añoReporte = año || new Date().getFullYear();
     
     // Obtener y procesar actividades
-    const actividadesGuardarecurso = getActividadesGuardarecurso(guardarecurso.id);
+    const actividadesGuardarecurso = getActividadesGuardarecurso(guardarecurso.id, añoReporte);
     const datosActividades = agruparActividadesPorTipoYMes(actividadesGuardarecurso);
     const tableData = generarDatosTabla(datosActividades);
     
@@ -355,12 +359,12 @@ export function generarReporteActividadesMensual(
     const doc = new jsPDF('landscape', 'mm', 'letter');
     
     // Agregar secciones
-    agregarEncabezado(doc, guardarecurso, areaNombre, año);
+    agregarEncabezado(doc, guardarecurso, areaNombre, añoReporte);
     agregarTabla(doc, tableData);
     agregarFooter(doc, actividadesGuardarecurso.length);
     
     // Guardar PDF
-    const nombreArchivo = `Informe_Mensual_${guardarecurso.apellido}_${año}.pdf`;
+    const nombreArchivo = `Informe_Mensual_${guardarecurso.apellido}_${añoReporte}.pdf`;
     doc.save(nombreArchivo);
     
     return {

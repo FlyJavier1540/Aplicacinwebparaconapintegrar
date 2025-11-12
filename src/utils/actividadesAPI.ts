@@ -72,13 +72,11 @@ let actividadesCache: {
 };
 
 /**
- * Limpia el cache de actividades
- * Útil después de crear/actualizar/eliminar una actividad
+ * Invalida el cache de actividades
  */
-export function clearActividadesCache(): void {
-  actividadesCache.data = null;
-  actividadesCache.timestamp = null;
-  console.log('🧹 Cache de actividades limpiado');
+export function invalidarCacheActividades(): void {
+  actividadesCache = null;
+  // Cache limpiado silenciosamente
 }
 
 /**
@@ -206,7 +204,7 @@ export async function createActividadAPI(formData: ActividadFormData, accessToke
     }
 
     // Limpiar cache
-    clearActividadesCache();
+    invalidarCacheActividades();
 
     // Transformar respuesta al formato del frontend
     const act = result.actividad;
@@ -257,7 +255,7 @@ export async function updateActividadAPI(actividadId: string, formData: Activida
     }
 
     // Limpiar cache
-    clearActividadesCache();
+    invalidarCacheActividades();
 
     // Transformar respuesta al formato del frontend
     const act = result.actividad;
@@ -307,7 +305,7 @@ export async function deleteActividadAPI(actividadId: string, accessToken: strin
     }
 
     // Limpiar cache
-    clearActividadesCache();
+    invalidarCacheActividades();
 
     return true;
   } catch (error) {
@@ -351,7 +349,7 @@ export async function createActividadesBulkAPI(
     }
 
     // Limpiar cache
-    clearActividadesCache();
+    invalidarCacheActividades();
 
     // Transformar las actividades de la respuesta al formato del frontend
     const actividadesTransformadas = result.actividades.map((act: any) => ({
