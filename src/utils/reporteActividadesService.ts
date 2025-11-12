@@ -222,15 +222,25 @@ function agregarEncabezado(
   doc.setFontSize(11);
   doc.text(`Informe Mensual de Actividades ${año}`, 140, 29, { align: 'center' });
   
-  // Guardarrecursos (CENTRADO)
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  const textoGuardarrecursos = `Guardarrecursos:     ${guardarecurso.nombre} ${guardarecurso.apellido}`;
-  doc.text(textoGuardarrecursos, 140, 45, { align: 'center' });
+  // Línea divisoria decorativa
+  doc.setDrawColor(22, 163, 74); // Verde CONAP
+  doc.setLineWidth(0.5);
+  doc.line(60, 35, 220, 35);
   
-  // Área Protegida (CENTRADO)
-  const textoArea = `Área Protegida:     ${areaNombre}`;
-  doc.text(textoArea, 140, 52, { align: 'center' });
+  // Información del Guardarrecurso y Área (centrado completo)
+  doc.setFontSize(10);
+  
+  const inicioY = 42;
+  const centroX = 140;
+  
+  // Guardarrecursos (centrado)
+  doc.setFont('helvetica', 'bold');
+  const textoGuardarrecursos = `Guardarrecursos:  ${guardarecurso.nombre} ${guardarecurso.apellido}`;
+  doc.text(textoGuardarrecursos, centroX, inicioY, { align: 'center' });
+  
+  // Área Protegida (centrado)
+  const textoArea = `Área Protegida:  ${areaNombre}`;
+  doc.text(textoArea, centroX, inicioY + 7, { align: 'center' });
 }
 
 /**
@@ -308,10 +318,12 @@ function agregarFooter(doc: jsPDF, totalActividades: number): void {
   doc.setTextColor(0, 0, 0);
   doc.text('* Se adjunta el informe descriptivo en ____ hojas papel bond', 15, finalY + 8);
   
-  // Información adicional del sistema (más abajo)
+  // Información adicional del sistema (abajo a la derecha)
   doc.setFontSize(8);
   doc.setTextColor(100, 100, 100);
-  doc.text(`Total de actividades: ${totalActividades} | Generado: ${new Date().toLocaleString('es-GT')}`, 15, finalY + 15);
+  const textoTotal = `Total de actividades: ${totalActividades} | Generado: ${new Date().toLocaleString('es-GT')}`;
+  const anchoPagina = 279.4; // Ancho de página letter en landscape
+  doc.text(textoTotal, anchoPagina - 15, finalY + 15, { align: 'right' });
 }
 
 /**
