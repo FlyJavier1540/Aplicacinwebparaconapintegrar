@@ -339,37 +339,44 @@ export async function generarReportePDF(
         distancia = dist ? `${dist} km` : 'N/A';
       }
       
-      // Coordenadas X (act_longitud_inicio)
-      const coordX = ruta.coordenadasInicio 
-        ? ruta.coordenadasInicio.lng.toFixed(4) 
-        : '';
+      // Coordenadas Inicio (X=lng, Y=lat)
+      const coordInicio = ruta.coordenadasInicio 
+        ? `${ruta.coordenadasInicio.lat.toFixed(4)}, ${ruta.coordenadasInicio.lng.toFixed(4)}`
+        : 'N/A';
       
-      // Coordenadas Y (act_latitud_inicio)
-      const coordY = ruta.coordenadasInicio 
-        ? ruta.coordenadasInicio.lat.toFixed(4) 
-        : '';
+      // Coordenadas Fin (X=lng, Y=lat)
+      const coordFin = ruta.coordenadasFin 
+        ? `${ruta.coordenadasFin.lat.toFixed(4)}, ${ruta.coordenadasFin.lng.toFixed(4)}`
+        : 'N/A';
       
       // Observaciones (act_descripcion - descripción de la actividad)
       const observaciones = ruta.descripcion || 'Ninguna';
       
-      return [fecha, codigoActividad, participantes, distancia, coordX, coordY, observaciones];
+      return [fecha, codigoActividad, participantes, distancia, coordInicio, coordFin, observaciones];
     });
 
     // Calcular ancho disponible para la tabla
     const availableWidth = pageWidth - (2 * margin);
     
-    // Crear tabla con autoTable (anchos proporcionales que sumen el ancho disponible)
+    // Crear tabla con encabezado jerárquico personalizado
     autoTable(doc, {
       startY: yPos + 5,
-      head: [[
-        'FECHA',
-        'CÓDIGO DE\nACTIVIDAD',
-        'PARTICIPANTES',
-        'DISTANCIA\nRECORRIDA',
-        'X',
-        'Y',
-        'OBSERVACIONES'
-      ]],
+      head: [
+        // Primera fila: encabezados principales
+        [
+          { content: 'FECHA', rowSpan: 2 },
+          { content: 'CÓDIGO DE\nACTIVIDAD', rowSpan: 2 },
+          { content: 'PARTICIPANTES', rowSpan: 2 },
+          { content: 'DISTANCIA\nRECORRIDA', rowSpan: 2 },
+          { content: 'Coordenadas', colSpan: 2 },
+          { content: 'OBSERVACIONES', rowSpan: 2 }
+        ],
+        // Segunda fila: subencabezados de coordenadas
+        [
+          { content: 'Inicio', colSpan: 1 },
+          { content: 'Fin', colSpan: 1 }
+        ]
+      ],
       body: tableData.length > 0 ? tableData : [['', '', '', '', '', '', 'No hay patrullajes registrados']],
       theme: 'grid',
       styles: {
@@ -395,8 +402,8 @@ export async function generarReportePDF(
         1: { cellWidth: 28, halign: 'center' }, // CÓDIGO DE ACTIVIDAD
         2: { cellWidth: 40, halign: 'left' },   // PARTICIPANTES
         3: { cellWidth: 22, halign: 'center' }, // DISTANCIA RECORRIDA
-        4: { cellWidth: 22, halign: 'center' }, // X
-        5: { cellWidth: 22, halign: 'center' }, // Y
+        4: { cellWidth: 22, halign: 'center' }, // Inicio
+        5: { cellWidth: 22, halign: 'center' }, // Fin
         6: { cellWidth: 'auto', halign: 'left' }    // OBSERVACIONES (auto-ajusta al espacio restante)
       },
       margin: { left: margin, right: margin },

@@ -14,6 +14,7 @@ import { AreaProtegida, Guardarecurso } from '../types';
 import { Search, Clock, CheckCircle, FileText } from 'lucide-react';
 import { projectId } from './supabase/info';
 import { getRequiredAuthToken } from './base-api-service';
+import { conapLogo } from '../src/logo';
 
 /**
  * Interface para hallazgo
@@ -645,7 +646,7 @@ export async function agregarSeguimientoAPI(
  */
 
 /**
- * Genera un reporte PDF de un hallazgo
+ * Genera un reporte PDF de un hallazgo con el diseño oficial de CONAP
  */
 export function generarReportePDF(
   hallazgo: Hallazgo,
@@ -653,237 +654,309 @@ export function generarReportePDF(
   guardarecursos: Guardarecurso[]
 ): { success: boolean; fileName?: string; error?: string } {
   try {
-    const pdf = new jsPDF();
+    // Crear documento PDF en orientación vertical (portrait)
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'letter'
+    });
+    
     const area = areasProtegidas.find(a => a.id === hallazgo.areaProtegida);
     const guardarecurso = guardarecursos.find(g => g.id === hallazgo.guardarecurso);
     
-    let yPosition = 20;
     const pageWidth = pdf.internal.pageSize.width;
+    const pageHeight = pdf.internal.pageSize.height;
     const margin = 20;
     const contentWidth = pageWidth - (margin * 2);
+    let yPosition = 20;
 
-    // Encabezado
-    pdf.setFillColor(34, 139, 34); // Verde CONAP
-    pdf.rect(0, 0, pageWidth, 40, 'F');
+    // ========================================
+    // ENCABEZADO CON LOGO
+    // ========================================
     
-    pdf.setTextColor(255, 255, 255);
-    pdf.setFontSize(20);
-    pdf.text('CONAP', margin, 15);
+    // Logo de CONAP (esquina superior derecha)
+    try {
+      if (conapLogo && typeof conapLogo === 'string' && conapLogo.length > 0) {
+        pdf.addImage(conapLogo, 'PNG', pageWidth - 45, 10, 30, 30);
+      }
+    } catch (error) {
+      console.warn('⚠️ No se pudo cargar el logo CONAP:', error);
+      // Continuar sin el logo
+    }
     
+    // Títulos (lado izquierdo)
+    pdf.setTextColor(0, 0, 0);
+    pdf.setFont('helvetica', 'bold');
+    
+    // Título principal
+    pdf.setFontSize(14);
+    pdf.text('Consejo Nacional de Áreas Protegidas', margin, 20);
+    
+    // Subtítulo
     pdf.setFontSize(12);
-    pdf.text('Consejo Nacional de Áreas Protegidas', margin, 25);
-    pdf.text('Guatemala', margin, 32);
+    pdf.text('Dirección Regional Altiplano Occidental', margin, 27);
+    
+    // Título del documento
+    pdf.setFontSize(13);
+    pdf.text('REPORTE DE HALLAZGO', margin, 35);
+    
+    // Línea divisoria decorativa
+    pdf.setDrawColor(22, 163, 74); // Verde CONAP
+    pdf.setLineWidth(0.5);
+    pdf.line(margin, 40, pageWidth - margin, 40);
     
     yPosition = 50;
 
-    // Título del reporte
-    pdf.setTextColor(0, 0, 0);
-    pdf.setFontSize(16);
-    pdf.text('REPORTE DE HALLAZGO', margin, yPosition);
-    yPosition += 10;
-
-    // Línea separadora
-    pdf.setDrawColor(200, 200, 200);
-    pdf.line(margin, yPosition, pageWidth - margin, yPosition);
-    yPosition += 10;
-
-    // Información del hallazgo
-    pdf.setFontSize(14);
-    pdf.setFont(undefined, 'bold');
-    pdf.text('INFORMACIÓN GENERAL', margin, yPosition);
-    yPosition += 8;
-
-    pdf.setFontSize(10);
-    pdf.setFont(undefined, 'normal');
+    // ========================================
+    // INFORMACIÓN GENERAL - DISEÑO MEJORADO
+    // ========================================
     
-    // Título
-    pdf.setFont(undefined, 'bold');
+    pdf.setFontSize(11);
+    pdf.setTextColor(0, 0, 0);
+    
+    // Título (ocupa toda la línea)
+    pdf.setFont('helvetica', 'bold');
     pdf.text('Título:', margin, yPosition);
-    pdf.setFont(undefined, 'normal');
-    const tituloLines = pdf.splitTextToSize(hallazgo.titulo, contentWidth - 30);
-    pdf.text(tituloLines, margin + 30, yPosition);
-    yPosition += (tituloLines.length * 5) + 3;
+    pdf.setFont('helvetica', 'normal');
+    const tituloWidth = pdf.getTextWidth('Título: ');
+    const tituloLines = pdf.splitTextToSize(hallazgo.titulo, contentWidth - tituloWidth - 5);
+    pdf.text(tituloLines, margin + tituloWidth + 2, yPosition);
+    yPosition += Math.max(7, tituloLines.length * 5 + 3);
 
-    // Prioridad
-    pdf.setFont(undefined, 'bold');
+    // Fila con Prioridad (izquierda) y Estado (derecha)
+    pdf.setFont('helvetica', 'bold');
     pdf.text('Prioridad:', margin, yPosition);
-    pdf.setFont(undefined, 'normal');
-    pdf.text(hallazgo.prioridad, margin + 30, yPosition);
-    yPosition += 6;
+    pdf.setFont('helvetica', 'normal');
+    const prioridadWidth = pdf.getTextWidth('Prioridad: ');
+    pdf.text(hallazgo.prioridad, margin + prioridadWidth + 2, yPosition);
+    
+    // Estado (derecha - alineado a la mitad de la página)
+    const mitadPagina = pageWidth / 2 + 10;
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('Estado:', mitadPagina, yPosition);
+    pdf.setFont('helvetica', 'normal');
+    const estadoWidth = pdf.getTextWidth('Estado: ');
+    pdf.text(hallazgo.estado, mitadPagina + estadoWidth + 2, yPosition);
+    yPosition += 7;
 
-    // Estado
-    pdf.setFont(undefined, 'bold');
-    pdf.text('Estado:', margin, yPosition);
-    pdf.setFont(undefined, 'normal');
-    pdf.text(hallazgo.estado, margin + 30, yPosition);
-    yPosition += 6;
-
-    // Área Protegida
-    pdf.setFont(undefined, 'bold');
+    // Fila con Área Protegida (izquierda) y Coordenadas (derecha)
+    pdf.setFont('helvetica', 'bold');
     pdf.text('Área Protegida:', margin, yPosition);
-    pdf.setFont(undefined, 'normal');
-    pdf.text(area?.nombre || 'N/A', margin + 30, yPosition);
-    yPosition += 6;
-
-    // Guardarecurso
-    pdf.setFont(undefined, 'bold');
-    pdf.text('Reportado por:', margin, yPosition);
-    pdf.setFont(undefined, 'normal');
-    pdf.text(guardarecurso ? `${guardarecurso.nombre} ${guardarecurso.apellido}` : 'N/A', margin + 30, yPosition);
-    yPosition += 6;
-
-    // Ubicación
-    pdf.setFont(undefined, 'bold');
-    pdf.text('Ubicación:', margin, yPosition);
-    pdf.setFont(undefined, 'normal');
-    const ubicacionLines = pdf.splitTextToSize(hallazgo.ubicacion, contentWidth - 30);
-    pdf.text(ubicacionLines, margin + 30, yPosition);
-    yPosition += (ubicacionLines.length * 5) + 3;
-
-    // Coordenadas
+    pdf.setFont('helvetica', 'normal');
+    const areaWidth = pdf.getTextWidth('Área Protegida: ');
+    const areaNombre = area?.nombre || 'N/A';
+    pdf.text(areaNombre, margin + areaWidth + 2, yPosition);
+    
+    // Coordenadas (derecha en dos líneas) - solo si existen
     if (hallazgo.coordenadas) {
-      pdf.setFont(undefined, 'bold');
-      pdf.text('Coordenadas:', margin, yPosition);
-      pdf.setFont(undefined, 'normal');
-      pdf.text(`${hallazgo.coordenadas.lat.toFixed(6)}, ${hallazgo.coordenadas.lng.toFixed(6)}`, margin + 30, yPosition);
-      yPosition += 6;
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('Coordenadas:', mitadPagina, yPosition);
+      pdf.setFont('helvetica', 'normal');
+      const coordWidth = pdf.getTextWidth('Coordenadas: ');
+      
+      // Latitud en la primera línea
+      const latText = `Lat: ${hallazgo.coordenadas.lat.toFixed(6)}`;
+      pdf.text(latText, mitadPagina + coordWidth + 2, yPosition);
+      
+      // Longitud en la segunda línea
+      const longText = `Long: ${hallazgo.coordenadas.lng.toFixed(6)}`;
+      pdf.text(longText, mitadPagina + coordWidth + 2, yPosition + 5);
     }
+    yPosition += 7;
 
-    // Fecha de reporte
-    pdf.setFont(undefined, 'bold');
+    // Reportado por (ocupa toda la línea)
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('Reportado por:', margin, yPosition);
+    pdf.setFont('helvetica', 'normal');
+    const reportadoWidth = pdf.getTextWidth('Reportado por: ');
+    pdf.text(guardarecurso ? `${guardarecurso.nombre} ${guardarecurso.apellido}` : 'N/A', margin + reportadoWidth + 2, yPosition);
+    yPosition += 7;
+
+    // Fecha de reporte (ocupa toda la línea)
+    pdf.setFont('helvetica', 'bold');
     pdf.text('Fecha de Reporte:', margin, yPosition);
-    pdf.setFont(undefined, 'normal');
-    pdf.text(format(new Date(hallazgo.fechaReporte), "d 'de' MMMM 'de' yyyy, HH:mm", { locale: es }), margin + 30, yPosition);
-    yPosition += 6;
+    pdf.setFont('helvetica', 'normal');
+    const fechaReporteWidth = pdf.getTextWidth('Fecha de Reporte: ');
+    pdf.text(format(new Date(hallazgo.fechaReporte), "dd/MM/yyyy", { locale: es }), margin + fechaReporteWidth + 2, yPosition);
+    yPosition += 7;
 
-    // Fecha de resolución
+    // Fecha de resolución (si existe)
     if (hallazgo.fechaResolucion) {
-      pdf.setFont(undefined, 'bold');
+      pdf.setFont('helvetica', 'bold');
       pdf.text('Fecha de Resolución:', margin, yPosition);
-      pdf.setFont(undefined, 'normal');
-      pdf.text(format(new Date(hallazgo.fechaResolucion), "d 'de' MMMM 'de' yyyy, HH:mm", { locale: es }), margin + 30, yPosition);
-      yPosition += 8;
+      pdf.setFont('helvetica', 'normal');
+      const fechaResolucionWidth = pdf.getTextWidth('Fecha de Resolución: ');
+      pdf.text(format(new Date(hallazgo.fechaResolucion), "dd/MM/yyyy", { locale: es }), margin + fechaResolucionWidth + 2, yPosition);
+      yPosition += 7;
     }
 
-    yPosition += 5;
-
-    // Descripción
-    pdf.setFontSize(14);
-    pdf.setFont(undefined, 'bold');
-    pdf.text('DESCRIPCIÓN', margin, yPosition);
     yPosition += 8;
 
+    // ========================================
+    // DESCRIPCIÓN
+    // ========================================
+    
+    pdf.setFontSize(11);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('DESCRIPCIÓN', margin, yPosition);
+    yPosition += 6;
+
     pdf.setFontSize(10);
-    pdf.setFont(undefined, 'normal');
+    pdf.setFont('helvetica', 'normal');
     const descripcionLines = pdf.splitTextToSize(hallazgo.descripcion, contentWidth);
     pdf.text(descripcionLines, margin, yPosition);
     yPosition += (descripcionLines.length * 5) + 8;
 
-    // Observaciones
+    // ========================================
+    // OBSERVACIONES
+    // ========================================
+    
     if (hallazgo.observaciones) {
-      pdf.setFontSize(14);
-      pdf.setFont(undefined, 'bold');
+      // Verificar si necesitamos nueva página
+      if (yPosition > 240) {
+        pdf.addPage();
+        yPosition = 20;
+      }
+      
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
       pdf.text('OBSERVACIONES', margin, yPosition);
-      yPosition += 8;
+      yPosition += 6;
 
       pdf.setFontSize(10);
-      pdf.setFont(undefined, 'normal');
+      pdf.setFont('helvetica', 'normal');
       const observacionesLines = pdf.splitTextToSize(hallazgo.observaciones, contentWidth);
       pdf.text(observacionesLines, margin, yPosition);
       yPosition += (observacionesLines.length * 5) + 8;
     }
 
-    // Acciones tomadas
+    // ========================================
+    // ACCIONES TOMADAS
+    // ========================================
+    
     if (hallazgo.accionesTomadas) {
-      pdf.setFontSize(14);
-      pdf.setFont(undefined, 'bold');
+      // Verificar si necesitamos nueva página
+      if (yPosition > 240) {
+        pdf.addPage();
+        yPosition = 20;
+      }
+      
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
       pdf.text('ACCIONES TOMADAS', margin, yPosition);
-      yPosition += 8;
+      yPosition += 6;
 
       pdf.setFontSize(10);
-      pdf.setFont(undefined, 'normal');
+      pdf.setFont('helvetica', 'normal');
       const accionesLines = pdf.splitTextToSize(hallazgo.accionesTomadas, contentWidth);
       pdf.text(accionesLines, margin, yPosition);
       yPosition += (accionesLines.length * 5) + 8;
     }
 
-    // Verificar si necesitamos una nueva página
-    if (yPosition > 250) {
-      pdf.addPage();
-      yPosition = 20;
-    }
-
-    // Evidencias
+    // ========================================
+    // EVIDENCIAS
+    // ========================================
+    
     if (hallazgo.evidencias && hallazgo.evidencias.length > 0) {
-      pdf.setFontSize(14);
-      pdf.setFont(undefined, 'bold');
+      // Verificar si necesitamos nueva página
+      if (yPosition > 250) {
+        pdf.addPage();
+        yPosition = 20;
+      }
+      
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
       pdf.text('EVIDENCIAS FOTOGRÁFICAS', margin, yPosition);
-      yPosition += 8;
+      yPosition += 6;
 
       pdf.setFontSize(10);
-      pdf.setFont(undefined, 'normal');
+      pdf.setFont('helvetica', 'normal');
       pdf.text(`Se registraron ${hallazgo.evidencias.length} evidencia(s) fotográfica(s)`, margin, yPosition);
       yPosition += 8;
     }
 
-    // Historial de seguimiento
+    // ========================================
+    // HISTORIAL DE SEGUIMIENTO
+    // ========================================
+    
     if (hallazgo.seguimiento && hallazgo.seguimiento.length > 0) {
-      // Verificar si necesitamos una nueva página
+      // Verificar si necesitamos nueva página
       if (yPosition > 220) {
         pdf.addPage();
         yPosition = 20;
       }
 
-      pdf.setFontSize(14);
-      pdf.setFont(undefined, 'bold');
-      pdf.text('HISTORIAL DE SEGUIMIENTO', margin, yPosition);
-      yPosition += 8;
+      // Línea divisoria antes del historial de seguimiento
+      pdf.setDrawColor(22, 163, 74); // Verde CONAP
+      pdf.setLineWidth(0.5);
+      pdf.line(margin, yPosition, pageWidth - margin, yPosition);
+      yPosition += 6;
 
-      pdf.setFontSize(9);
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('HISTORIAL DE SEGUIMIENTO', margin, yPosition);
+      yPosition += 6;
+
+      pdf.setFontSize(10);
       hallazgo.seguimiento.forEach((seg, index) => {
-        // Verificar si necesitamos una nueva página
-        if (yPosition > 270) {
+        // Verificar si necesitamos nueva página
+        if (yPosition > 260) {
           pdf.addPage();
           yPosition = 20;
         }
 
-        pdf.setFont(undefined, 'bold');
-        pdf.text(`${index + 1}. ${format(new Date(seg.fecha), "d/MM/yyyy HH:mm", { locale: es })}`, margin, yPosition);
+        // Línea divisoria antes de cada seguimiento (excepto el primero)
+        if (index > 0) {
+          pdf.setDrawColor(200, 200, 200); // Gris claro
+          pdf.setLineWidth(0.3);
+          pdf.line(margin, yPosition - 3, pageWidth - margin, yPosition - 3);
+          yPosition += 2;
+        }
+
+        pdf.setFont('helvetica', 'bold');
+        pdf.text(`${index + 1}. ${format(new Date(seg.fecha), "dd/MM/yyyy", { locale: es })}`, margin, yPosition);
         yPosition += 5;
 
-        pdf.setFont(undefined, 'normal');
-        pdf.text(`Acción: ${seg.accion}`, margin + 5, yPosition);
-        yPosition += 5;
-
-        pdf.text(`Responsable: ${seg.responsable}`, margin + 5, yPosition);
+        pdf.setFont('helvetica', 'normal');
+        pdf.text(`Acción: ${seg.accion}`, margin + 3, yPosition);
         yPosition += 5;
 
         if (seg.observaciones) {
-          const obsLines = pdf.splitTextToSize(`Observaciones: ${seg.observaciones}`, contentWidth - 5);
-          pdf.text(obsLines, margin + 5, yPosition);
-          yPosition += (obsLines.length * 4) + 5;
+          const obsLines = pdf.splitTextToSize(`Observaciones: ${seg.observaciones}`, contentWidth - 3);
+          pdf.text(obsLines, margin + 3, yPosition);
+          yPosition += (obsLines.length * 5) + 5;
         } else {
-          yPosition += 3;
+          yPosition += 5;
         }
+
+        pdf.text(`Responsable: ${seg.responsable}`, margin + 3, yPosition);
+        yPosition += 8;
       });
     }
 
-    // Pie de página
+    // ========================================
+    // PIE DE PÁGINA
+    // ========================================
+    
     const totalPages = pdf.getNumberOfPages();
     for (let i = 1; i <= totalPages; i++) {
       pdf.setPage(i);
       pdf.setFontSize(8);
       pdf.setTextColor(128, 128, 128);
+      
+      // Número de página (centrado)
       pdf.text(
         `Página ${i} de ${totalPages}`,
         pageWidth / 2,
-        pdf.internal.pageSize.height - 10,
+        pageHeight - 10,
         { align: 'center' }
       );
+      
+      // Fecha de generación (izquierda)
       pdf.text(
-        `Generado el ${format(new Date(), "d 'de' MMMM 'de' yyyy 'a las' HH:mm", { locale: es })}`,
+        `Generado: ${format(new Date(), "dd/MM/yyyy HH:mm", { locale: es })}`,
         margin,
-        pdf.internal.pageSize.height - 10
+        pageHeight - 10
       );
     }
 
