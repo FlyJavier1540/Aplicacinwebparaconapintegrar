@@ -201,9 +201,12 @@ function agregarEncabezado(
 ): void {
   // Logo de CONAP (izquierda)
   try {
-    doc.addImage(conapLogo, 'PNG', 15, 10, 30, 30);
+    if (conapLogo && typeof conapLogo === 'string' && conapLogo.length > 0) {
+      doc.addImage(conapLogo, 'PNG', 15, 10, 30, 30);
+    }
   } catch (error) {
-    console.warn('No se pudo cargar el logo CONAP:', error);
+    console.warn('⚠️ No se pudo cargar el logo CONAP:', error);
+    // Continuar sin el logo
   }
   
   // Títulos centrados (derecha del logo)
@@ -367,10 +370,17 @@ export function generarReporteActividadesMensual(
     };
     
   } catch (error) {
-    console.error('Error al generar PDF:', error);
+    console.error('❌ Error al generar PDF:', error);
+    
+    // Mejorar el mensaje de error
+    let errorMessage = 'No se pudo crear el archivo PDF';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    }
+    
     return {
       success: false,
-      error: 'No se pudo crear el archivo PDF'
+      error: errorMessage
     };
   }
 }

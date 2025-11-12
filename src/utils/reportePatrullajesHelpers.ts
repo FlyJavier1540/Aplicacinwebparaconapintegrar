@@ -222,176 +222,197 @@ export async function generarReportePDF(
   fechaFin?: string,
   logoBase64?: string
 ): Promise<void> {
-  // Buscar guardarrecurso por ID (usr_id)
-  const gr = guardarecursos.find(g => g.id === guardarecursoSeleccionado);
-  // Buscar área protegida por ID (ar_id = usr_area del guardarrecurso)
-  const area = gr && gr.areaAsignada ? areasProtegidas.find(a => a.id === gr.areaAsignada) : null;
+  try {
+    // Buscar guardarrecurso por ID (usr_id)
+    const gr = guardarecursos.find(g => g.id === guardarecursoSeleccionado);
+    // Buscar área protegida por ID (ar_id = usr_area del guardarrecurso)
+    const area = gr && gr.areaAsignada ? areasProtegidas.find(a => a.id === gr.areaAsignada) : null;
 
-  // Crear documento PDF en orientación horizontal (landscape)
-  const doc = new jsPDF({
-    orientation: 'landscape',
-    unit: 'mm',
-    format: 'letter'
-  });
+    // Crear documento PDF en orientación horizontal (landscape)
+    const doc = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'letter'
+    });
 
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = 15;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 15;
 
-  // Título principal
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.text('HOJA DE CONTROL DE PATRULLAJES', pageWidth / 2, 20, { align: 'center' });
-
-  // Logo CONAP en la esquina superior derecha
-  if (logoBase64) {
-    try {
-      doc.addImage(logoBase64, 'PNG', pageWidth - 35, 10, 20, 20);
-    } catch (error) {
-      console.error('Error al agregar logo:', error);
+    // Logo CONAP en la esquina superior derecha
+    if (logoBase64) {
+      try {
+        if (logoBase64 && typeof logoBase64 === 'string' && logoBase64.length > 0) {
+          // Logo más grande y mejor posicionado en la derecha
+          doc.addImage(logoBase64, 'PNG', pageWidth - 45, 10, 30, 30);
+        }
+      } catch (error) {
+        console.warn('⚠️ No se pudo cargar el logo CONAP:', error);
+        // Continuar sin el logo
+      }
     }
-  }
 
-  // Información del guardarrecurso y área
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  
-  // Recuadro para nombre del guardarrecurso
-  const nombreLabel = 'Nombre del Guardarrecursos:';
-  const nombreValue = gr ? `${gr.nombre} ${gr.apellido}` : '';
-  doc.setDrawColor(0, 0, 0);
-  doc.setLineWidth(0.3);
-  doc.rect(margin, 32, 120, 7, 'S');
-  doc.setFont('helvetica', 'bold');
-  doc.text(nombreLabel, margin + 2, 37);
-  doc.setFont('helvetica', 'normal');
-  doc.text(nombreValue, margin + 60, 37);
-
-  // Recuadro para firma
-  const firmaX = pageWidth - margin - 80;
-  if (firmaX > 0 && !isNaN(firmaX)) {
-    doc.rect(firmaX, 32, 80, 7, 'S');
+    // Título principal
+    doc.setFontSize(14);
     doc.setFont('helvetica', 'bold');
-    doc.text('Firma:', firmaX + 2, 37);
-  }
-
-  // Recuadro para área protegida
-  doc.rect(margin, 40, 120, 7, 'S');
-  doc.setFont('helvetica', 'bold');
-  doc.text('Área Protegida:', margin + 2, 45);
-  doc.setFont('helvetica', 'normal');
-  const areaValue = area ? area.nombre : '';
-  doc.text(areaValue, margin + 35, 45);
-
-  // Período y total de patrullajes (información adicional)
-  let yPos = 52;
-  if (fechaInicio || fechaFin) {
-    doc.setFontSize(9);
-    let periodoText = 'Período: ';
-    if (fechaInicio) periodoText += format(new Date(fechaInicio), 'dd/MM/yyyy', { locale: es });
-    if (fechaInicio && fechaFin) periodoText += ' - ';
-    if (fechaFin) periodoText += format(new Date(fechaFin), 'dd/MM/yyyy', { locale: es });
-    doc.text(periodoText, margin, yPos);
-    yPos += 5;
-  }
-
-  doc.setFontSize(9);
-  doc.text(`Total de Patrullajes: ${rutas.length}`, margin, yPos);
-  doc.text(`Fecha de Generación: ${format(new Date(), 'dd/MM/yyyy HH:mm', { locale: es })}`, pageWidth - margin - 60, yPos);
-
-  // Preparar datos para la tabla
-  const tableData = rutas.map((ruta) => {
-    const fecha = format(new Date(ruta.fecha), 'dd/MM/yyyy', { locale: es });
-    // Usar act_codigo si existe, sino usar act_id (primeros 15 caracteres)
-    const codigoActividad = ruta.codigo || ruta.id.substring(0, 15) || 'N/A';
+    doc.text('HOJA DE CONTROL DE PATRULLAJES', pageWidth / 2, 20, { align: 'center' });
     
-    // Participantes (act_usuario)
-    const guardarecurso = guardarecursos.find(g => g.id === ruta.guardarecurso);
-    const participantes = guardarecurso 
-      ? `${guardarecurso.nombre} ${guardarecurso.apellido}`
-      : 'N/A';
+    // Subtítulo
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Consejo Nacional de Áreas Protegidas - CONAP', pageWidth / 2, 26, { align: 'center' });
     
-    // Distancia recorrida (calculada entre act_latitud_inicio/act_longitud_inicio y act_latitud_fin/act_longitud_fin)
-    let distancia = 'N/A';
-    if (ruta.coordenadasInicio && ruta.coordenadasFin) {
-      const dist = calcularDistanciaHaversine(
-        ruta.coordenadasInicio.lat,
-        ruta.coordenadasInicio.lng,
-        ruta.coordenadasFin.lat,
-        ruta.coordenadasFin.lng
-      );
-      distancia = dist ? `${dist} km` : 'N/A';
+    // Línea divisoria decorativa
+    doc.setDrawColor(22, 163, 74); // Verde CONAP
+    doc.setLineWidth(0.5);
+    doc.line(margin, 30, pageWidth - margin, 30);
+
+    // Información del guardarrecurso y área
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(0, 0, 0);
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
+    
+    // Recuadro para nombre del guardarrecurso
+    const nombreLabel = 'Nombre del Guardarrecursos:';
+    const nombreValue = gr ? `${gr.nombre} ${gr.apellido}` : '';
+    doc.rect(margin, 35, 120, 7, 'S');
+    doc.setFont('helvetica', 'bold');
+    doc.text(nombreLabel, margin + 2, 40);
+    doc.setFont('helvetica', 'normal');
+    doc.text(nombreValue, margin + 60, 40);
+
+    // Recuadro para firma
+    const firmaX = pageWidth - margin - 80;
+    if (firmaX > 0 && !isNaN(firmaX)) {
+      doc.rect(firmaX, 35, 80, 7, 'S');
+      doc.setFont('helvetica', 'bold');
+      doc.text('Firma:', firmaX + 2, 40);
     }
-    
-    // Coordenadas X (act_longitud_inicio)
-    const coordX = ruta.coordenadasInicio 
-      ? ruta.coordenadasInicio.lng.toFixed(4) 
-      : '';
-    
-    // Coordenadas Y (act_latitud_inicio)
-    const coordY = ruta.coordenadasInicio 
-      ? ruta.coordenadasInicio.lat.toFixed(4) 
-      : '';
-    
-    // Observaciones (act_descripcion - descripción de la actividad)
-    const observaciones = ruta.descripcion || 'Ninguna';
-    
-    return [fecha, codigoActividad, participantes, distancia, coordX, coordY, observaciones];
-  });
 
-  // Calcular ancho disponible para la tabla
-  const availableWidth = pageWidth - (2 * margin);
-  
-  // Crear tabla con autoTable (anchos proporcionales que sumen el ancho disponible)
-  autoTable(doc, {
-    startY: yPos + 5,
-    head: [[
-      'FECHA',
-      'CÓDIGO DE\nACTIVIDAD',
-      'PARTICIPANTES',
-      'DISTANCIA\nRECORRIDA',
-      'X',
-      'Y',
-      'OBSERVACIONES'
-    ]],
-    body: tableData.length > 0 ? tableData : [['', '', '', '', '', '', 'No hay patrullajes registrados']],
-    theme: 'grid',
-    styles: {
-      fontSize: 8,
-      cellPadding: 2,
-      lineColor: [0, 0, 0],
-      lineWidth: 0.3,
-      valign: 'middle',
-      halign: 'center',
-      overflow: 'linebreak'
-    },
-    headStyles: {
-      fillColor: [255, 255, 255],
-      textColor: [0, 0, 0],
-      fontStyle: 'bold',
-      halign: 'center',
-      valign: 'middle',
-      lineWidth: 0.3,
-      lineColor: [0, 0, 0]
-    },
-    columnStyles: {
-      0: { cellWidth: 22, halign: 'center' }, // FECHA
-      1: { cellWidth: 28, halign: 'center' }, // CÓDIGO DE ACTIVIDAD
-      2: { cellWidth: 40, halign: 'left' },   // PARTICIPANTES
-      3: { cellWidth: 22, halign: 'center' }, // DISTANCIA RECORRIDA
-      4: { cellWidth: 22, halign: 'center' }, // X
-      5: { cellWidth: 22, halign: 'center' }, // Y
-      6: { cellWidth: 'auto', halign: 'left' }    // OBSERVACIONES (auto-ajusta al espacio restante)
-    },
-    margin: { left: margin, right: margin },
-    tableWidth: availableWidth,
-    tableLineColor: [0, 0, 0],
-    tableLineWidth: 0.3
-  });
+    // Recuadro para área protegida
+    doc.rect(margin, 43, 120, 7, 'S');
+    doc.setFont('helvetica', 'bold');
+    doc.text('Área Protegida:', margin + 2, 48);
+    doc.setFont('helvetica', 'normal');
+    const areaValue = area ? area.nombre : '';
+    doc.text(areaValue, margin + 35, 48);
 
-  // Guardar el PDF
-  const nombreArchivo = `hoja_control_patrullajes_${format(new Date(), 'yyyy-MM-dd', { locale: es })}.pdf`;
-  doc.save(nombreArchivo);
+    // Período y total de patrullajes (información adicional)
+    let yPos = 55;
+    if (fechaInicio || fechaFin) {
+      doc.setFontSize(9);
+      let periodoText = 'Período: ';
+      if (fechaInicio) periodoText += format(new Date(fechaInicio), 'dd/MM/yyyy', { locale: es });
+      if (fechaInicio && fechaFin) periodoText += ' - ';
+      if (fechaFin) periodoText += format(new Date(fechaFin), 'dd/MM/yyyy', { locale: es });
+      doc.text(periodoText, margin, yPos);
+      yPos += 5;
+    }
+
+    doc.setFontSize(9);
+    doc.text(`Total de Patrullajes: ${rutas.length}`, margin, yPos);
+    doc.text(`Fecha de Generación: ${format(new Date(), 'dd/MM/yyyy HH:mm', { locale: es })}`, pageWidth - margin - 60, yPos);
+
+    // Preparar datos para la tabla
+    const tableData = rutas.map((ruta) => {
+      const fecha = format(new Date(ruta.fecha), 'dd/MM/yyyy', { locale: es });
+      // Usar act_codigo si existe, sino usar act_id (primeros 15 caracteres)
+      const codigoActividad = ruta.codigo || ruta.id.substring(0, 15) || 'N/A';
+      
+      // Participantes (act_usuario)
+      const guardarecurso = guardarecursos.find(g => g.id === ruta.guardarecurso);
+      const participantes = guardarecurso 
+        ? `${guardarecurso.nombre} ${guardarecurso.apellido}`
+        : 'N/A';
+      
+      // Distancia recorrida (calculada entre act_latitud_inicio/act_longitud_inicio y act_latitud_fin/act_longitud_fin)
+      let distancia = 'N/A';
+      if (ruta.coordenadasInicio && ruta.coordenadasFin) {
+        const dist = calcularDistanciaHaversine(
+          ruta.coordenadasInicio.lat,
+          ruta.coordenadasInicio.lng,
+          ruta.coordenadasFin.lat,
+          ruta.coordenadasFin.lng
+        );
+        distancia = dist ? `${dist} km` : 'N/A';
+      }
+      
+      // Coordenadas X (act_longitud_inicio)
+      const coordX = ruta.coordenadasInicio 
+        ? ruta.coordenadasInicio.lng.toFixed(4) 
+        : '';
+      
+      // Coordenadas Y (act_latitud_inicio)
+      const coordY = ruta.coordenadasInicio 
+        ? ruta.coordenadasInicio.lat.toFixed(4) 
+        : '';
+      
+      // Observaciones (act_descripcion - descripción de la actividad)
+      const observaciones = ruta.descripcion || 'Ninguna';
+      
+      return [fecha, codigoActividad, participantes, distancia, coordX, coordY, observaciones];
+    });
+
+    // Calcular ancho disponible para la tabla
+    const availableWidth = pageWidth - (2 * margin);
+    
+    // Crear tabla con autoTable (anchos proporcionales que sumen el ancho disponible)
+    autoTable(doc, {
+      startY: yPos + 5,
+      head: [[
+        'FECHA',
+        'CÓDIGO DE\nACTIVIDAD',
+        'PARTICIPANTES',
+        'DISTANCIA\nRECORRIDA',
+        'X',
+        'Y',
+        'OBSERVACIONES'
+      ]],
+      body: tableData.length > 0 ? tableData : [['', '', '', '', '', '', 'No hay patrullajes registrados']],
+      theme: 'grid',
+      styles: {
+        fontSize: 8,
+        cellPadding: 2,
+        lineColor: [0, 0, 0],
+        lineWidth: 0.3,
+        valign: 'middle',
+        halign: 'center',
+        overflow: 'linebreak'
+      },
+      headStyles: {
+        fillColor: [255, 255, 255],
+        textColor: [0, 0, 0],
+        fontStyle: 'bold',
+        halign: 'center',
+        valign: 'middle',
+        lineWidth: 0.3,
+        lineColor: [0, 0, 0]
+      },
+      columnStyles: {
+        0: { cellWidth: 22, halign: 'center' }, // FECHA
+        1: { cellWidth: 28, halign: 'center' }, // CÓDIGO DE ACTIVIDAD
+        2: { cellWidth: 40, halign: 'left' },   // PARTICIPANTES
+        3: { cellWidth: 22, halign: 'center' }, // DISTANCIA RECORRIDA
+        4: { cellWidth: 22, halign: 'center' }, // X
+        5: { cellWidth: 22, halign: 'center' }, // Y
+        6: { cellWidth: 'auto', halign: 'left' }    // OBSERVACIONES (auto-ajusta al espacio restante)
+      },
+      margin: { left: margin, right: margin },
+      tableWidth: availableWidth,
+      tableLineColor: [0, 0, 0],
+      tableLineWidth: 0.3
+    });
+
+    // Guardar el PDF
+    const nombreArchivo = `hoja_control_patrullajes_${format(new Date(), 'yyyy-MM-dd', { locale: es })}.pdf`;
+    doc.save(nombreArchivo);
+    
+  } catch (error) {
+    console.error('❌ Error al generar PDF de patrullajes:', error);
+    throw error; // Re-lanzar el error para que sea manejado por el componente
+  }
 }
 
 /**
@@ -401,22 +422,44 @@ export async function generarReportePDF(
  */
 export async function convertirImagenABase64(imageSrc: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'Anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(img, 0, 0);
-        const dataURL = canvas.toDataURL('image/png');
-        resolve(dataURL);
-      } else {
-        reject(new Error('No se pudo obtener el contexto del canvas'));
+    try {
+      // Si ya es una imagen en base64, devolverla directamente
+      if (imageSrc.startsWith('data:image')) {
+        resolve(imageSrc);
+        return;
       }
-    };
-    img.onerror = reject;
-    img.src = imageSrc;
+
+      const img = new Image();
+      img.crossOrigin = 'Anonymous';
+      
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            const dataURL = canvas.toDataURL('image/png');
+            resolve(dataURL);
+          } else {
+            reject(new Error('No se pudo obtener el contexto del canvas'));
+          }
+        } catch (error) {
+          console.error('❌ Error al procesar imagen en canvas:', error);
+          reject(error);
+        }
+      };
+      
+      img.onerror = (error) => {
+        console.error('❌ Error al cargar imagen:', error);
+        reject(new Error('No se pudo cargar la imagen'));
+      };
+      
+      img.src = imageSrc;
+    } catch (error) {
+      console.error('❌ Error en convertirImagenABase64:', error);
+      reject(error);
+    }
   });
 }

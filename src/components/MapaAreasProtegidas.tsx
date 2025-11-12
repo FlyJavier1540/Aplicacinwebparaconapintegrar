@@ -4,6 +4,11 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { MapPin } from 'lucide-react';
 import { GoogleMap, Marker, useJsApiLoader } from '@react-google-maps/api';
 
+// ⚠️ NOTA: Google Maps Marker está deprecated desde Feb 2024, pero seguirá funcionando
+// por al menos 12 meses. La librería @react-google-maps/api aún no soporta AdvancedMarkerElement.
+// Este warning se puede ignorar de forma segura por ahora.
+// Ref: https://developers.google.com/maps/documentation/javascript/advanced-markers/migration
+
 // Definición de las propiedades del componente
 interface MapaAreasProtegidasProps {
   areas: AreaProtegida[];

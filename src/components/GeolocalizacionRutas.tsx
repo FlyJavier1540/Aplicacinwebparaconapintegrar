@@ -10,6 +10,12 @@ import { Search, Route, Navigation, Eye, Calendar, User, FileText, Loader2, Aler
 import { Actividad, Guardarecurso } from '../types';
 import { motion } from 'motion/react';
 import { GoogleMap, Marker, Polyline, useJsApiLoader } from '@react-google-maps/api';
+
+// ⚠️ NOTA: Google Maps Marker está deprecated desde Feb 2024, pero seguirá funcionando
+// por al menos 12 meses. La librería @react-google-maps/api aún no soporta AdvancedMarkerElement.
+// Este warning se puede ignorar de forma segura por ahora.
+// Ref: https://developers.google.com/maps/documentation/javascript/advanced-markers/migration
+
 import { 
   filterStyles, 
   listCardStyles, 
@@ -26,7 +32,7 @@ import { areasProtegidasService } from '../utils/areasProtegidasService';
 import { authService } from '../utils/authService';
 import { Alert, AlertDescription } from './ui/alert';
 import { forceLogout } from '../utils/base-api-service';
-import { generarReportePDF, convertirImagenABase64 } from '../utils/reportePatrullajesHelpers';
+import { generarReportePDF } from '../utils/reportePatrullajesHelpers';
 import { conapLogo } from '../src/logo';
 import { toast } from 'sonner@2.0.3';
 
@@ -213,10 +219,8 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
     );
 
     try {
-      // Convertir logo a Base64
-      const logoBase64 = await convertirImagenABase64(conapLogo);
-      
       // Generar PDF con el diseño oficial usando áreas protegidas reales de la BD
+      // conapLogo ya viene en Base64 desde la importación, no necesita conversión
       await generarReportePDF(
         rutasParaReporte,
         guardarecursos,
@@ -224,7 +228,7 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
         reportGuardarecurso,
         reportFechaInicio,
         reportFechaFin,
-        logoBase64
+        conapLogo // Usar directamente el logo (ya está en Base64)
       );
       
       // Mostrar mensaje de éxito
@@ -232,9 +236,15 @@ export function GeolocalizacionRutas({ userPermissions, currentUser }: Geolocali
         description: 'El reporte PDF se ha descargado correctamente.'
       });
     } catch (error) {
-      console.error('Error al generar PDF:', error);
+      console.error('❌ Error al generar PDF:', error);
+      
+      // Mostrar mensaje de error más descriptivo
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : 'No se pudo generar el PDF. Intenta de nuevo.';
+      
       toast.error('Error al generar reporte', {
-        description: 'No se pudo generar el PDF. Intenta de nuevo.'
+        description: errorMessage
       });
     }
     
