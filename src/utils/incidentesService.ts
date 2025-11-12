@@ -19,6 +19,7 @@ import { AreaProtegida, Guardarecurso } from '../types';
 import { cardStyles } from '../styles/shared-styles';
 import { projectId } from './supabase/info';
 import { getRequiredAuthToken } from './base-api-service';
+import { conapLogo } from '../src/logo';
 
 /**
  * Interface para incidente
@@ -619,14 +620,8 @@ export function generarReportePDF(
     // ========================================
     
     // Logo de CONAP (esquina superior derecha)
-    try {
-      const conapLogo = require('../src/logo').conapLogo;
-      if (conapLogo && typeof conapLogo === 'string' && conapLogo.length > 0) {
-        pdf.addImage(conapLogo, 'PNG', pageWidth - 45, 10, 30, 30);
-      }
-    } catch (error) {
-      console.warn('⚠️ No se pudo cargar el logo CONAP:', error);
-      // Continuar sin el logo
+    if (conapLogo && typeof conapLogo === 'string' && conapLogo.length > 0) {
+      pdf.addImage(conapLogo, 'PNG', pageWidth - 45, 10, 30, 30);
     }
     
     // Títulos (lado izquierdo)
