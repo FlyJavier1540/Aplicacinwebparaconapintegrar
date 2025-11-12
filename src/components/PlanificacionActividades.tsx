@@ -185,6 +185,10 @@ export function PlanificacionActividades({ userPermissions }: PlanificacionActiv
 
       const actividadesFromServer = await fetchActividades(accessToken);
       setActividadesList(actividadesFromServer);
+      
+      // ✅ ACTUALIZAR actividadesSync para que el reporte pueda acceder a las actividades
+      actividadesSync.updateActividades(actividadesFromServer);
+      console.log('✅ actividadesSync actualizado con', actividadesFromServer.length, 'actividades');
     } catch (error) {
       console.error('❌ ERROR AL CARGAR ACTIVIDADES - FORZANDO LOGOUT:', error);
       forceLogout();

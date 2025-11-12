@@ -637,12 +637,13 @@ export function RegistroGuardarecursos({ userPermissions, currentUser }: Registr
   /**
    * Handler para generar reporte - Memoizado
    */
-  const handleGenerarReporte = useCallback((guardarecurso: Guardarecurso) => {
+  const handleGenerarReporte = useCallback(async (guardarecurso: Guardarecurso) => {
     // Buscar el área asignada desde areasProtegidas (obtenida de base de datos)
     const area = areasProtegidas.find(a => a.id === guardarecurso.areaAsignada);
     const areaNombre = area?.nombre || 'Sin asignar';
     
-    generarReporteActividadesMensual({ 
+    // Generar reporte (ahora es async y carga actividades automáticamente)
+    await generarReporteActividadesMensual({ 
       guardarecurso, 
       areaNombre 
     });
