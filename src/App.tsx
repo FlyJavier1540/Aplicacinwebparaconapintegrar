@@ -69,7 +69,7 @@ const navigationCategories = [
   // CATEGORÍA 1: Gestión de Personal
   {
     id: 'personal',
-    title: 'Gestión de Personal',
+    title: 'Personal',
     icon: Shield,
     color: 'emerald',
     gradient: 'from-emerald-500 to-green-600',
@@ -77,36 +77,36 @@ const navigationCategories = [
     darkBgGradient: 'from-emerald-950/50 to-green-950/50',
     items: [
       { id: 'dashboard', name: 'Dashboard', icon: LayoutDashboard },
-      { id: 'registro-guarda', name: 'Registro de Guarda Recursos', icon: Users },
+      { id: 'registro-guarda', name: 'Guardarrecursos', icon: Users },
       { id: 'asignacion-zonas', name: 'Áreas Protegidas', icon: Trees },
       { id: 'control-equipos', name: 'Control de Equipos', icon: Package },
     ]
   },
   {
     id: 'operaciones',
-    title: 'Operaciones de Campo',
+    title: 'Operaciones',
     icon: Briefcase,
     color: 'blue',
     gradient: 'from-blue-500 to-cyan-600',
     bgGradient: 'from-blue-50/50 to-cyan-50/50',
     darkBgGradient: 'from-blue-950/50 to-cyan-950/50',
     items: [
-      { id: 'planificacion', name: 'Planificación de Actividades', icon: Calendar },
-      { id: 'registro-diario', name: 'Registro Diario de Campo', icon: Activity },
-      { id: 'geolocalizacion', name: 'Geolocalización de Rutas', icon: Route },
+      { id: 'planificacion', name: 'Planificación', icon: Calendar },
+      { id: 'registro-diario', name: 'Registro Diario', icon: Activity },
+      { id: 'geolocalizacion', name: 'Geolocalización', icon: Route },
     ]
   },
   {
     id: 'control',
-    title: 'Control y Seguimiento',
+    title: 'Control',
     icon: Eye,
     color: 'orange',
     gradient: 'from-orange-500 to-amber-600',
     bgGradient: 'from-orange-50/50 to-amber-50/50',
     darkBgGradient: 'from-orange-950/50 to-amber-950/50',
     items: [
-      { id: 'hallazgos', name: 'Reporte de Hallazgos', icon: FileText },
-      { id: 'incidentes', name: 'Incidentes con Visitantes', icon: AlertTriangle },
+      { id: 'hallazgos', name: 'Hallazgos', icon: FileText },
+      { id: 'incidentes', name: 'Incidentes', icon: AlertTriangle },
     ]
   },
   {
