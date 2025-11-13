@@ -243,8 +243,8 @@ export async function generarReportePDF(
     if (logoBase64) {
       try {
         if (logoBase64 && typeof logoBase64 === 'string' && logoBase64.length > 0) {
-          // Logo más grande y mejor posicionado en la derecha
-          doc.addImage(logoBase64, 'PNG', pageWidth - 45, 15, 25, 25);
+          // Logo más pequeño y mejor posicionado dentro del encabezado
+          doc.addImage(logoBase64, 'PNG', pageWidth - 40, 18, 20, 20);
         }
       } catch (error) {
         console.warn('⚠️ No se pudo cargar el logo CONAP:', error);
