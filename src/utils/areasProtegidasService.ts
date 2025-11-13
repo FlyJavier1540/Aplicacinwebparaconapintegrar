@@ -495,10 +495,12 @@ let areasProtegidasCache: {
 
 /**
  * Limpia el cache de áreas protegidas
+ * Útil después de crear/actualizar/eliminar un área
  */
 export function clearAreasProtegidasCache(): void {
-  areasProtegidasCache = null;
-  // Cache limpiado silenciosamente
+  areasProtegidasCache.data = null;
+  areasProtegidasCache.timestamp = null;
+  console.log('🧹 Cache de áreas protegidas limpiado');
 }
 
 /**

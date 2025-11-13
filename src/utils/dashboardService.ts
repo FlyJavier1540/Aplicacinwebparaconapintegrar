@@ -114,11 +114,12 @@ async function getCatalogIds(): Promise<CatalogIds> {
 }
 
 /**
- * Invalida el cache de IDs de catálogos
+ * Limpia el cache de IDs de catálogos
+ * Útil para testing o cuando se modifican los catálogos
  */
-export function invalidarCacheCatalogos(): void {
+export function clearCatalogCache(): void {
   catalogIdsCache = null;
-  // Cache limpiado silenciosamente
+  console.log('🧹 Cache de catálogos limpiado');
 }
 
 // ===== FUNCIONES DE API =====
@@ -357,7 +358,7 @@ export const dashboardService = {
   buildEstadisticasCards,
   
   // Utilidades
-  invalidarCacheCatalogos
+  clearCatalogCache
 };
 
 export default dashboardService;

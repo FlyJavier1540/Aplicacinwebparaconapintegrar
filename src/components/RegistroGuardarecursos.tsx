@@ -388,11 +388,6 @@ export function RegistroGuardarecursos({ userPermissions, currentUser }: Registr
   const [isEstadoAlertOpen, setIsEstadoAlertOpen] = useState(false);
   const [estadoPendiente, setEstadoPendiente] = useState<EstadoPendiente | null>(null);
   
-  // Estados para el diálogo de selección de año de reporte
-  const [isYearDialogOpen, setIsYearDialogOpen] = useState(false);
-  const [guardarecursoForReport, setGuardarecursoForReport] = useState<Guardarecurso | null>(null);
-  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
-  
   const [formData, setFormData] = useState(guardarecursosService.createEmptyFormData());
   const [dpiDuplicado, setDpiDuplicado] = useState(false);
   const [correoDuplicado, setCorreoDuplicado] = useState(false);
@@ -624,7 +619,7 @@ export function RegistroGuardarecursos({ userPermissions, currentUser }: Registr
    */
   const handleEstadoClick = useCallback((id: string, nuevoEstado: 'Activo' | 'Suspendido' | 'Desactivado') => {
     const guardarecurso = guardarecursosList.find(g => g.id === id);
-    if (!guardarecursos) return;
+    if (!guardarecurso) return;
 
     if (!guardarecursosService.isValidEstadoChange(guardarecurso.estado, nuevoEstado)) {
       toast.info('Sin cambios', {
@@ -640,37 +635,19 @@ export function RegistroGuardarecursos({ userPermissions, currentUser }: Registr
   }, [guardarecursosList]);
 
   /**
-   * Handler para generar reporte - Abre diálogo de selección de año
+   * Handler para generar reporte - Memoizado
    */
-  const handleGenerarReporte = useCallback((guardarecurso: Guardarecurso) => {
-    setGuardarecursoForReport(guardarecurso);
-    setSelectedYear(new Date().getFullYear());
-    setIsYearDialogOpen(true);
-  }, []);
-
-  /**
-   * Confirmar generación de reporte con año seleccionado
-   */
-  const confirmarGeneracionReporte = useCallback(async () => {
-    if (!guardarecursoForReport) return;
-    
+  const handleGenerarReporte = useCallback(async (guardarecurso: Guardarecurso) => {
     // Buscar el área asignada desde areasProtegidas (obtenida de base de datos)
-    const area = areasProtegidas.find(a => a.id === guardarecursoForReport.areaAsignada);
+    const area = areasProtegidas.find(a => a.id === guardarecurso.areaAsignada);
     const areaNombre = area?.nombre || 'Sin asignar';
     
-    // Cerrar diálogo
-    setIsYearDialogOpen(false);
-    
-    // Generar reporte con año seleccionado
+    // Generar reporte (ahora es async y carga actividades automáticamente)
     await generarReporteActividadesMensual({ 
-      guardarecurso: guardarecursoForReport, 
-      areaNombre,
-      año: selectedYear
+      guardarecurso, 
+      areaNombre 
     });
-    
-    // Limpiar estado
-    setGuardarecursoForReport(null);
-  }, [guardarecursoForReport, areasProtegidas, selectedYear]);
+  }, [areasProtegidas]);
 
   /**
    * Confirmar cambio de estado - Memoizado
@@ -1201,65 +1178,6 @@ export function RegistroGuardarecursos({ userPermissions, currentUser }: Registr
               className={estadoAlertStyles.confirmButton}
             >
               Confirmar
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Diálogo para seleccionar año de reporte */}
-      <AlertDialog open={isYearDialogOpen} onOpenChange={setIsYearDialogOpen}>
-        <AlertDialogContent className={estadoAlertStyles.content}>
-          <AlertDialogHeader className={estadoAlertStyles.header}>
-            <AlertDialogTitle className={estadoAlertStyles.title}>
-              Generar Reporte Mensual
-            </AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className={estadoAlertStyles.description}>
-                {guardarecursoForReport && (
-                  <>
-                    <p className={estadoAlertStyles.descriptionText}>
-                      Está a punto de generar un informe mensual para{' '}
-                      <span className="font-medium text-gray-900 dark:text-gray-100">
-                        {guardarecursoForReport.nombre} {guardarecursoForReport.apellido}
-                      </span>
-                    </p>
-                    <div className={estadoAlertStyles.infoBox('Activo')}>
-                      <p className={estadoAlertStyles.infoText('Activo')}>
-                        Selecciona el año para el informe:
-                      </p>
-                      <Select value={selectedYear.toString()} onValueChange={(value) => setSelectedYear(parseInt(value))}>
-                        <SelectTrigger className={formStyles.selectTrigger}>
-                          <SelectValue placeholder="Seleccione año" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - i).map(year => (
-                            <SelectItem key={year} value={year.toString()}>
-                              {year}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </>
-                )}
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className={estadoAlertStyles.footer}>
-            <AlertDialogCancel 
-              onClick={() => {
-                setIsYearDialogOpen(false);
-                setGuardarecursoForReport(null);
-              }}
-              className={estadoAlertStyles.cancelButton}
-            >
-              Cancelar
-            </AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={confirmarGeneracionReporte}
-              className={estadoAlertStyles.confirmButton}
-            >
-              Generar
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

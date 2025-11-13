@@ -54,86 +54,6 @@ const SESSION_KEY = 'conap_session';
 const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 horas
 
 /**
- * 🧹 LIMPIEZA COMPLETA DE DATOS Y CACHÉ
- * 
- * Limpia TODOS los datos almacenados en el navegador:
- * - localStorage completo
- * - sessionStorage completo
- * - Cookies del dominio actual
- * - Caché del navegador (si está soportado)
- * 
- * Esta función se usa cuando el token ha expirado para asegurar
- * que NO queden datos en memoria o caché.
- * 
- * IMPORTANTE: Esta función debe estar ANTES de loadSession() porque loadSession() la llama
- */
-export async function limpiarDatosCompleto(): Promise<void> {
-  try {
-    // Limpiar localStorage
-    try {
-      localStorage.clear();
-    } catch (e) {
-      console.error('Error limpiando localStorage:', e);
-    }
-
-    // Limpiar sessionStorage
-    sessionStorage.clear();
-
-    // Limpiar cookies
-    document.cookie.split(";").forEach(c => {
-      document.cookie = c
-        .replace(/^ +/, "")
-        .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
-    });
-
-    // Limpiar caché del navegador usando Cache API (si está soportado)
-    if ('caches' in window) {
-      console.log('💾 Limpiando caché del navegador...');
-      try {
-        const cacheNames = await caches.keys();
-        await Promise.all(
-          cacheNames.map(cacheName => caches.delete(cacheName))
-        );
-        console.log('✅ Caché del navegador limpiado');
-      } catch (cacheError) {
-        console.warn('⚠️ No se pudo limpiar el caché del navegador:', cacheError);
-      }
-    }
-
-    // Limpiar IndexedDB de Supabase (si existe)
-    if ('indexedDB' in window) {
-      console.log('🗄️ Limpiando IndexedDB...');
-      try {
-        // Supabase usa IndexedDB para almacenar sesiones
-        const databases = await indexedDB.databases?.() || [];
-        for (const db of databases) {
-          if (db.name) {
-            indexedDB.deleteDatabase(db.name);
-          }
-        }
-        console.log('✅ IndexedDB limpiado');
-      } catch (idbError) {
-        console.warn('⚠️ No se pudo limpiar IndexedDB:', idbError);
-      }
-    }
-
-    console.log('✅ Limpieza completa finalizada');
-  } catch (error) {
-    console.error('❌ Error durante la limpieza completa:', error);
-    // Asegurar que al menos localStorage esté limpio
-    localStorage.clear();
-    sessionStorage.clear();
-  }
-}
-
-/**
- * Alias para limpiarDatosCompleto (mantener compatibilidad)
- */
-export async function clearAllData(): Promise<void> {
-  await limpiarDatosCompleto();
-}
-
-/**
  * Guarda la sesión en localStorage
  */
 export function saveSession(token: string, user: any): void {
@@ -186,6 +106,84 @@ export function loadSession(): AuthSession | null {
 export function clearSession(): void {
   localStorage.removeItem(SESSION_KEY);
   localStorage.removeItem('conap_auth_token');
+}
+
+/**
+ * 🧹 LIMPIEZA COMPLETA DE DATOS Y CACHÉ
+ * 
+ * Limpia TODOS los datos almacenados en el navegador:
+ * - localStorage completo
+ * - sessionStorage completo
+ * - Cookies del dominio actual
+ * - Caché del navegador (si está soportado)
+ * 
+ * Esta función se usa cuando el token ha expirado para asegurar
+ * que NO queden datos en memoria o caché.
+ */
+export async function clearAllData(): Promise<void> {
+  console.log('🧹 Iniciando limpieza completa de datos y caché...');
+  
+  try {
+    // 1. Limpiar localStorage completo
+    console.log('🗑️ Limpiando localStorage...');
+    localStorage.clear();
+    
+    // 2. Limpiar sessionStorage completo
+    console.log('🗑️ Limpiando sessionStorage...');
+    sessionStorage.clear();
+    
+    // 3. Limpiar todas las cookies del dominio actual
+    console.log('🍪 Limpiando cookies...');
+    const cookies = document.cookie.split(';');
+    for (let i = 0; i < cookies.length; i++) {
+      const cookie = cookies[i];
+      const eqPos = cookie.indexOf('=');
+      const name = eqPos > -1 ? cookie.substr(0, eqPos).trim() : cookie.trim();
+      
+      // Eliminar en todos los paths y dominios posibles
+      document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+      document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=' + window.location.hostname;
+      document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.' + window.location.hostname;
+    }
+    
+    // 4. Limpiar caché del navegador usando Cache API (si está soportado)
+    if ('caches' in window) {
+      console.log('💾 Limpiando caché del navegador...');
+      try {
+        const cacheNames = await caches.keys();
+        await Promise.all(
+          cacheNames.map(cacheName => caches.delete(cacheName))
+        );
+        console.log('✅ Caché del navegador limpiado');
+      } catch (cacheError) {
+        console.warn('⚠️ No se pudo limpiar el caché del navegador:', cacheError);
+      }
+    }
+    
+    // 5. Limpiar IndexedDB de Supabase (si existe)
+    if ('indexedDB' in window) {
+      console.log('🗄️ Limpiando IndexedDB...');
+      try {
+        // Supabase usa IndexedDB para almacenar sesiones
+        const databases = await indexedDB.databases?.() || [];
+        for (const db of databases) {
+          if (db.name) {
+            indexedDB.deleteDatabase(db.name);
+          }
+        }
+        console.log('✅ IndexedDB limpiado');
+      } catch (idbError) {
+        console.warn('⚠️ No se pudo limpiar IndexedDB:', idbError);
+      }
+    }
+    
+    console.log('✅ Limpieza completa finalizada');
+  } catch (error) {
+    console.error('❌ Error durante la limpieza completa:', error);
+    // Asegurar que al menos localStorage esté limpio
+    localStorage.clear();
+    sessionStorage.clear();
+  }
 }
 
 /**
@@ -415,11 +413,11 @@ export async function logout(): Promise<void> {
     await supabaseSignOut();
     
     // Limpiar TODOS los datos y caché
-    await limpiarDatosCompleto();
+    await clearAllData();
   } catch (error) {
     console.error('Error al cerrar sesión:', error);
     // Limpiar TODOS los datos aunque falle Supabase
-    await limpiarDatosCompleto();
+    await clearAllData();
   }
 }
 
@@ -729,7 +727,6 @@ export const authService = {
   saveSession,
   loadSession,
   clearSession,
-  limpiarDatosCompleto,
   clearAllData,
   isSessionValid,
   getCurrentUser,
