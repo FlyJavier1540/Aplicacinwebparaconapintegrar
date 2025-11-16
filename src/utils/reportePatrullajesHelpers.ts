@@ -243,8 +243,8 @@ export async function generarReportePDF(
     if (logoBase64) {
       try {
         if (logoBase64 && typeof logoBase64 === 'string' && logoBase64.length > 0) {
-          // Logo más pequeño y mejor posicionado dentro del encabezado
-          doc.addImage(logoBase64, 'PNG', pageWidth - 40, 18, 20, 20);
+          // Logo más pequeño y mejor posicionado - MÁS ARRIBA para evitar sobreposición
+          doc.addImage(logoBase64, 'PNG', pageWidth - 40, 10, 20, 20);
         }
       } catch (error) {
         console.warn('⚠️ No se pudo cargar el logo CONAP:', error);
@@ -262,10 +262,10 @@ export async function generarReportePDF(
     doc.setFont('helvetica', 'normal');
     doc.text('Consejo Nacional de Áreas Protegidas - CONAP', pageWidth / 2, 26, { align: 'center' });
     
-    // Línea divisoria decorativa
+    // Línea divisoria decorativa - MÁS ABAJO para evitar sobreposición
     doc.setDrawColor(22, 163, 74); // Verde CONAP
     doc.setLineWidth(0.5);
-    doc.line(margin, 30, pageWidth - margin, 30);
+    doc.line(margin, 33, pageWidth - margin, 33);
 
     // Información del guardarrecurso y área
     doc.setFontSize(10);

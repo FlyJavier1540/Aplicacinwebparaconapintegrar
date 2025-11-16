@@ -1,3 +1,6 @@
+import { isPWAInstalled } from './utils/register-service-worker';
+import { registerDynamicManifest } from './utils/pwa-manifest-generator';
+import { toast } from 'sonner@2.0.3';
 import { useState, lazy, Suspense, memo, useMemo, useEffect } from 'react';
 import { Login } from './components/Login';
 import { Dashboard } from './components/Dashboard';
@@ -13,8 +16,6 @@ import { conapLogo } from './src/logo';
 import { filterNavigationByRole, getModulePermissions, type UserRole } from './utils/permissions';
 import { dashboardStyles, headerStyles, containerStyles } from './styles/shared-styles';
 import { setAuthToken, getAuthToken, removeAuthToken } from './utils/base-api-service';
-import { registerServiceWorker, isPWAInstalled } from './utils/register-service-worker';
-import { toast } from 'sonner@2.0.3';
 import { 
   Users, 
   Calendar,
@@ -579,35 +580,99 @@ export default function App() {
     if (!document.querySelector("link[rel~='icon']")) {
       document.head.appendChild(link);
     }
+
+    // ===== CONFIGURACIÓN PWA - META TAGS =====
+    
+    // 1. Manifest link
+    const manifestLink = document.createElement('link');
+    manifestLink.rel = 'manifest';
+    manifestLink.href = '/manifest.json';
+    manifestLink.crossOrigin = 'use-credentials';
+    document.head.appendChild(manifestLink);
+
+    // 2. Theme color para Android
+    const themeColorMeta = document.createElement('meta');
+    themeColorMeta.name = 'theme-color';
+    themeColorMeta.content = '#16a34a';
+    document.head.appendChild(themeColorMeta);
+
+    // 3. Mobile web app capable para iOS
+    const appleCapableMeta = document.createElement('meta');
+    appleCapableMeta.name = 'apple-mobile-web-app-capable';
+    appleCapableMeta.content = 'yes';
+    document.head.appendChild(appleCapableMeta);
+
+    // 4. Status bar style para iOS
+    const appleStatusBarMeta = document.createElement('meta');
+    appleStatusBarMeta.name = 'apple-mobile-web-app-status-bar-style';
+    appleStatusBarMeta.content = 'black-translucent';
+    document.head.appendChild(appleStatusBarMeta);
+
+    // 5. Title para iOS
+    const appleTitleMeta = document.createElement('meta');
+    appleTitleMeta.name = 'apple-mobile-web-app-title';
+    appleTitleMeta.content = 'CONAP';
+    document.head.appendChild(appleTitleMeta);
+
+    // 6. Application name
+    const appNameMeta = document.createElement('meta');
+    appNameMeta.name = 'application-name';
+    appNameMeta.content = 'Sistema CONAP';
+    document.head.appendChild(appNameMeta);
+
+    // 7. Mobile optimized
+    const mobileOptimizedMeta = document.createElement('meta');
+    mobileOptimizedMeta.name = 'mobile-web-app-capable';
+    mobileOptimizedMeta.content = 'yes';
+    document.head.appendChild(mobileOptimizedMeta);
+
+    // 8. Viewport para PWA
+    let viewportMeta = document.querySelector('meta[name="viewport"]');
+    if (!viewportMeta) {
+      viewportMeta = document.createElement('meta');
+      (viewportMeta as HTMLMetaElement).name = 'viewport';
+      document.head.appendChild(viewportMeta);
+    }
+    (viewportMeta as HTMLMetaElement).content = 'width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover';
+
+    // 9. Description
+    const descriptionMeta = document.createElement('meta');
+    descriptionMeta.name = 'description';
+    descriptionMeta.content = 'Sistema de gestión de guardarrecursos del Consejo Nacional de Áreas Protegidas de Guatemala';
+    document.head.appendChild(descriptionMeta);
+
+    console.log('✅ Meta tags PWA configurados correctamente');
   }, []);
 
   /**
    * =============================================
-   * REGISTRO DEL SERVICE WORKER PARA PWA
+   * REGISTRO DEL MANIFEST PARA PWA
    * =============================================
    * 
-   * Registra el Service Worker para habilitar:
+   * Registra el manifest dinámico para habilitar:
    * - Instalación como PWA
-   * - Funcionalidad offline
-   * - Caché de recursos
+   * - Icono en pantalla de inicio
+   * - Modo standalone
+   * 
+   * ⚠️ NOTA: No se usa Service Worker por limitaciones de Figma Make
+   * La app es instalable pero NO funciona offline
    */
   useEffect(() => {
-    // Registrar Service Worker
-    registerServiceWorker()
-      .then((registration) => {
-        if (registration) {
-          console.log('✅ PWA: Service Worker registrado correctamente');
-          
-          // Verificar si ya está instalado
-          if (isPWAInstalled()) {
-            console.log('✅ PWA: Aplicación ya instalada');
-          } else {
-            console.log('📱 PWA: Aplicación lista para instalar');
-          }
+    console.log('🔄 Configurando PWA (solo manifest, sin Service Worker)...');
+    
+    registerDynamicManifest()
+      .then(() => {
+        console.log('✅ PWA: Manifest dinámico registrado');
+        console.log('📱 PWA: Aplicación lista para instalar');
+        console.log('ℹ️ PWA: Sin Service Worker (limitación de Figma Make)');
+        
+        // Verificar si ya está instalado
+        if (isPWAInstalled()) {
+          console.log('✅ PWA: Aplicación ya instalada');
         }
       })
       .catch((error) => {
-        console.error('❌ PWA: Error al registrar Service Worker:', error);
+        console.error('❌ PWA: Error al configurar manifest:', error);
       });
   }, []);
 
