@@ -7,11 +7,13 @@ import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Toaster } from './components/ui/sonner';
 import { CambiarContrasena } from './components/CambiarContrasena';
+import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from './components/ui/dropdown-menu';
 import { conapLogo } from './src/logo';
 import { filterNavigationByRole, getModulePermissions, type UserRole } from './utils/permissions';
 import { dashboardStyles, headerStyles, containerStyles } from './styles/shared-styles';
 import { setAuthToken, getAuthToken, removeAuthToken } from './utils/base-api-service';
+import { registerServiceWorker, isPWAInstalled } from './utils/register-service-worker';
 import { toast } from 'sonner@2.0.3';
 import { 
   Users, 
@@ -542,6 +544,7 @@ function AppContent({ currentUser, setCurrentUser, patrullajeEnProgreso, setPatr
             </div>
           </main>
           <Toaster position="top-right" richColors />
+          <PWAInstallPrompt />
           <CambiarContrasena 
             isOpen={isPasswordDialogOpen}
             onClose={() => setIsPasswordDialogOpen(false)}
@@ -576,6 +579,36 @@ export default function App() {
     if (!document.querySelector("link[rel~='icon']")) {
       document.head.appendChild(link);
     }
+  }, []);
+
+  /**
+   * =============================================
+   * REGISTRO DEL SERVICE WORKER PARA PWA
+   * =============================================
+   * 
+   * Registra el Service Worker para habilitar:
+   * - Instalación como PWA
+   * - Funcionalidad offline
+   * - Caché de recursos
+   */
+  useEffect(() => {
+    // Registrar Service Worker
+    registerServiceWorker()
+      .then((registration) => {
+        if (registration) {
+          console.log('✅ PWA: Service Worker registrado correctamente');
+          
+          // Verificar si ya está instalado
+          if (isPWAInstalled()) {
+            console.log('✅ PWA: Aplicación ya instalada');
+          } else {
+            console.log('📱 PWA: Aplicación lista para instalar');
+          }
+        }
+      })
+      .catch((error) => {
+        console.error('❌ PWA: Error al registrar Service Worker:', error);
+      });
   }, []);
 
   /**
